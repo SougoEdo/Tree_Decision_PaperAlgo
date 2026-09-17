@@ -4,7 +4,8 @@ from main import (
     PortfolioConfig,
     PortfolioOptimizer,
     TreeConfig,
-    SPOPortfolioTree,
+    performance_report,
+    train_and_test,
     weekly_covariance,
     weekly_rows,
 )
@@ -24,12 +25,8 @@ def load_data():
 
 dates, closes, daily_features, current_weights = load_data()
 
-# One row per Monday close, with 180 days of returns behind it; the last
-# 52 weeks are held out to test the tree after training.
+# One row per Monday close, with 180 days of returns behind it.
 rows = weekly_rows(dates, closes, daily_features, weekday=0, window=180)
-test_weeks = 52
-train = slice(0, len(rows.R) - test_weeks)
-test = slice(len(rows.R) - test_weeks, None)
 
 portfolio = PortfolioOptimizer(
     n_assets=rows.R.shape[1],
@@ -40,29 +37,25 @@ portfolio = PortfolioOptimizer(
     ),
 )
 
-tree = SPOPortfolioTree(
-    optimizer=portfolio,
-    config=TreeConfig(
-        max_depth=2,
-        min_samples_leaf=20,
-        max_thresholds=None,         # Every threshold; affordable with screening
-        min_sharpe_improvement=0.0,  # Raise (e.g. 0.05 per week) to ignore small in-sample gains
-        prediction_bound=0.10,       # Leaf scores bounded to ±10%
-        search_passes=3,
-        search_grid_size=7,
-        verbose=True,
-    ),
+config = TreeConfig(
+    max_depth=2,
+    min_samples_leaf=20,
+    max_thresholds=None,         # Every threshold; affordable with screening
+    min_sharpe_improvement=0.0,  # Hurdle for accepting a split (see the discussion on noise)
+    prediction_bound=0.10,       # Leaf scores bounded to ±10%
+    search_passes=3,
+    search_grid_size=7,
+    verbose=True,
 )
 
-tree.fit(rows.X[train], rows.R[train], rows.Sigma[train])   # holdings start from equal weights
+# Train on all weeks but the last 52, then compare the tree with the same tree
+# without splits and with an equal-weight portfolio, on both periods.
+tree, train_paths, test_paths = train_and_test(portfolio, config, rows, test_periods=52)
 tree.describe()
-train_path = tree.replay(rows.X[train], rows.R[train], rows.Sigma[train])
-test_path = tree.replay(rows.X[test], rows.R[test], rows.Sigma[test],
-                        initial_weights=train_path.final_holdings)
-for name, path in (("Train", train_path), ("Test", test_path)):
-    print(f"{name}: {len(path.net_returns)} weeks, mean net return "
-          f"{path.net_returns.mean():.3%} per week, Sharpe {path.sharpe:.3f} per week, "
-          f"turnover {path.turnover.sum():.2f}, fees {path.fees.sum():.3%}")
+print("\nTrain (annualized)")
+print(performance_report(train_paths))
+print("\nTest (annualized, holdings carried over from training)")
+print(performance_report(test_paths))
 
 # Live decision at the latest close (run on the decision weekday).
 X_live = np.asarray(daily_features, dtype=float)[-1:]

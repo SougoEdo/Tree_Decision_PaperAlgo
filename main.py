@@ -28,6 +28,10 @@ and execution are NOT modeled.
 replay_path (or SPOPortfolioTree.replay) trades a strategy period after period
 in row order: holdings drift with returns between rebalances, fees are paid on
 each trade, and it reports net returns, turnover, regret and the Sharpe ratio.
+replay_constant_weights does the same for a fixed target such as equal weights.
+train_and_test and performance_report compare the tree with the same tree
+without splits and with an equal-weight portfolio, on training and test rows
+(annualized return, volatility, Sharpe, max drawdown, turnover and fees).
 
 Training (fit) is path-aware and grows the tree best-first. Each round replays
 the current tree to get the holdings it would have had, screens every split of
@@ -51,13 +55,13 @@ regret, started from the leaf's mean return; it is approximate, not a global
 solver. The fitted scores need not be calibrated expected-return forecasts.
 
 Read in order: configurations -> optimizer -> replay -> leaf fitting -> splits
--> weekly rows -> demo.
+-> weekly rows -> evaluation -> demo.
 Based on the SPO-tree idea, not a reproduction of the papers' full experiments.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import combinations, product
 import numpy as np
 
@@ -266,6 +270,32 @@ class PathResult:
         std = self.net_returns.std(ddof=1)
         return float(self.net_returns.mean() / std) if std > 0 else float("nan")
 
+    @property
+    def max_drawdown(self) -> float:
+        """Largest fall of net wealth below its running peak (-0.25 means -25%)."""
+        wealth = np.cumprod(1 + self.net_returns)
+        peak = np.maximum.accumulate(np.r_[1.0, wealth])[1:]   # wealth starts at 1
+        return float(np.min(wealth / peak - 1))
+
+    def summary(self, periods_per_year=52):
+        """Annualized figures of the net returns (52 periods a year for weekly rows).
+
+        return: compounded growth per year; volatility and sharpe: from the
+        per-period mean and standard deviation; max_drawdown: over the path;
+        turnover: average per period; fees: per year, as a fraction of equity.
+        """
+        periods = len(self.net_returns)
+        scale = float(np.sqrt(periods_per_year))
+        volatility = self.net_returns.std(ddof=1) if periods > 1 else float("nan")
+        return {
+            "return": float(np.prod(1 + self.net_returns) ** (periods_per_year / periods) - 1),
+            "volatility": float(volatility) * scale,
+            "sharpe": self.sharpe * scale,
+            "max_drawdown": self.max_drawdown,
+            "turnover": float(self.turnover.mean()),
+            "fees": float(self.fees.mean()) * periods_per_year,
+        }
+
 
 def replay_path(optimizer, scores, returns, covariance, initial_weights=None):
     """Trade period by period, in row order (rows must be chronological).
@@ -277,27 +307,51 @@ def replay_path(optimizer, scores, returns, covariance, initial_weights=None):
     The first holdings are equal weights unless initial_weights is given, e.g.
     the final_holdings of a previous path.
     """
-    n = optimizer.n_assets
+    R, S, u = _path_inputs(optimizer, returns, covariance, initial_weights)
     C = finite_array(scores, "scores", 2)
-    R = finite_array(returns, "returns", 2)
-    if C.shape != R.shape or C.shape[1] != n:
+    if C.shape != R.shape:
         raise ValueError("scores and returns must both have shape (T, n_assets).")
+    return _trade(optimizer, lambda t, holdings: optimizer.solve(C[t], holdings, S[t]),
+                  R, S, u)
+
+
+def replay_constant_weights(optimizer, weights, returns, covariance, initial_weights=None):
+    """Rebalance to the same target weights every period, e.g. equal weights.
+
+    Same accounting as replay_path, but the target ignores costs: every period
+    it trades all the way back from the drifted holdings.
+    """
+    R, S, u = _path_inputs(optimizer, returns, covariance, initial_weights)
+    target = finite_array(weights, "weights", 1)
+    if target.shape != (optimizer.n_assets,) or not optimizer.is_feasible(target):
+        raise ValueError("weights must be a long-only, fully-invested portfolio "
+                         "within max_weight.")
+    return _trade(optimizer, lambda t, holdings: target, R, S, u)
+
+
+def _path_inputs(optimizer, returns, covariance, initial_weights):
+    """Validated returns, per-period covariances and first holdings."""
+    n = optimizer.n_assets
+    R = finite_array(returns, "returns", 2)
+    if R.shape[1] != n:
+        raise ValueError("returns must have shape (T, n_assets).")
     if np.any(R <= -1):
         raise ValueError("Simple returns must be greater than -1.")
     S = covariance_rows(covariance, len(R), n)
     if initial_weights is None:
-        u = np.full(n, 1.0 / n)
-    else:
-        u = finite_array(initial_weights, "initial_weights", 1)
-        if u.shape != (n,) or np.any(u < 0) or abs(u.sum() - 1) > 1e-6:
-            raise ValueError("initial_weights must be n_assets nonnegative "
-                             "weights summing to 1.")
-        u = u / u.sum()
+        return R, S, np.full(n, 1.0 / n)
+    u = finite_array(initial_weights, "initial_weights", 1)
+    if u.shape != (n,) or np.any(u < 0) or abs(u.sum() - 1) > 1e-6:
+        raise ValueError("initial_weights must be n_assets nonnegative weights summing to 1.")
+    return R, S, u / u.sum()
 
+
+def _trade(optimizer, decide, R, S, u):
+    """Apply decide(t, holdings) period by period and do the accounting."""
     holdings, weights = np.empty_like(R), np.empty_like(R)
     for t in range(len(R)):
         holdings[t] = u
-        weights[t] = optimizer.solve(C[t], u, S[t])
+        weights[t] = decide(t, u)
         grown = weights[t] * (1 + R[t])
         u = grown / grown.sum()          # grown.sum() == 1 + r_t @ w_t
 
@@ -663,48 +717,96 @@ def weekly_rows(dates, closes, daily_features=None, weekday=0, window=180, ridge
         Sigma=np.array([weekly_covariance(P, d, window, ridge) for d in decisions]))
 
 
-# 6. Runnable synthetic example. Replace X, R, Sigma with your aligned dataset.
+# 6. Compare the tree with simple baselines on a training and a test period.
+def train_and_test(portfolio, config, rows, test_periods=52):
+    """Fit on all rows but the last test_periods, then replay three strategies.
+
+    Returns (tree, train_paths, test_paths). Each dict holds the replayed paths
+    of the SPO tree, the same tree without splits (max_depth=0) and an
+    equal-weight portfolio rebalanced every period. In the test period each
+    strategy continues from its own final training holdings.
+    """
+    if not 0 < test_periods < len(rows.R):
+        raise ValueError("test_periods must leave at least one training row.")
+    train = slice(0, len(rows.R) - test_periods)
+    test = slice(len(rows.R) - test_periods, None)
+    X, R, S = rows.X, rows.R, rows.Sigma
+    tree = SPOPortfolioTree(portfolio, config).fit(X[train], R[train], S[train])
+    no_split = SPOPortfolioTree(portfolio, replace(config, max_depth=0, verbose=False))
+    no_split.fit(X[train], R[train], S[train])
+    equal = np.full(portfolio.n_assets, 1.0 / portfolio.n_assets)
+    strategies = {
+        "SPO tree": lambda part, start: tree.replay(X[part], R[part], S[part], start),
+        "tree without splits": lambda part, start: no_split.replay(
+            X[part], R[part], S[part], start),
+        "equal weight": lambda part, start: replay_constant_weights(
+            portfolio, equal, R[part], S[part], start),
+    }
+    train_paths = {name: run(train, None) for name, run in strategies.items()}
+    test_paths = {name: run(test, train_paths[name].final_holdings)
+                  for name, run in strategies.items()}
+    return tree, train_paths, test_paths
+
+
+def performance_report(paths, periods_per_year=52):
+    """One line per named path: annualized return, volatility and Sharpe, max
+    drawdown, average turnover per period and fees per year."""
+    width = max(len(name) for name in paths) + 2
+    lines = [f"{'':{width}}{'return':>9}{'volatility':>12}{'Sharpe':>8}"
+             f"{'max DD':>9}{'turnover':>10}{'fees/yr':>9}"]
+    for name, path in paths.items():
+        s = path.summary(periods_per_year)
+        lines.append(f"{name:{width}}{s['return']:>9.1%}{s['volatility']:>12.1%}"
+                     f"{s['sharpe']:>8.2f}{s['max_drawdown']:>9.1%}"
+                     f"{s['turnover']:>10.2f}{s['fees']:>9.2%}")
+    return "\n".join(lines)
+
+
+# 7. Runnable synthetic example of the whole weekly pipeline.
 def demo():
-    rng = np.random.default_rng(7)
-    weeks = 156
-    # A persistent market regime (alternating 13-week blocks) drives expected
-    # returns. feature_0 observes the regime with noise; feature_1 is pure noise.
-    regime = np.tile(np.repeat([1.0, -1.0], 13), 6)
-    X = np.column_stack([regime + rng.normal(0, 0.5, weeks), rng.normal(size=weeks)])
-    # Weekly volatility 3%, correlation 0.5. Used directly as Sigma here; a
-    # real run estimates it from past returns only.
-    covariance = np.array([[0.0009, 0.00045],
-                           [0.00045, 0.0009]])
-    means = np.where(regime[:, None] > 0, [0.010, -0.002], [-0.002, 0.010])
-    R = means + rng.multivariate_normal(np.zeros(2), covariance, size=weeks)
+    rng = np.random.default_rng(3)
+    # Five years of daily closes for three crypto-like assets (3% daily
+    # volatility). A regime of about two months tilts the drifts of the first
+    # two assets in opposite directions.
+    days = 5 * 365 + 1
+    start = np.datetime64("2021-01-01")
+    dates = np.arange(start, start + np.timedelta64(days, "D"))
+    regime = np.repeat(rng.choice([-1.0, 1.0], size=days // 60 + 1), 60)[:days]
+    drift = np.where(regime[:, None] > 0, [0.002, -0.001, 0.0], [-0.001, 0.002, 0.0])
+    daily_cov = 0.03 ** 2 * np.array([[1.0, 0.6, 0.5], [0.6, 1.0, 0.5], [0.5, 0.5, 1.0]])
+    closes = 100 * np.cumprod(
+        1 + drift + rng.multivariate_normal(np.zeros(3), daily_cov, days), axis=0)
 
-    portfolio = PortfolioOptimizer(n_assets=2, config=PortfolioConfig(
-        max_weight=1.0, fee_rate=0.001, risk_aversion=2.0,
-    ))
-    # With a zero Sharpe margin, splits on pure noise can win in-sample; a
-    # margin of 0.05 per week ignores such small gains in this example.
-    tree = SPOPortfolioTree(portfolio, TreeConfig(
-        max_depth=2, min_samples_leaf=15, max_thresholds=None,
-        min_sharpe_improvement=0.05, prediction_bound=0.05,
-        search_passes=2, search_grid_size=5, verbose=True,
-    ))
-    # Two years to train; the third year tests, continuing the holdings.
-    cut = 104
-    tree.fit(X[:cut], R[:cut], covariance)
-    tree.describe(["feature_0", "feature_1"])
-    train = tree.replay(X[:cut], R[:cut], covariance)
-    test = tree.replay(X[cut:], R[cut:], covariance, initial_weights=train.final_holdings)
-    for name, path in (("Train", train), ("Test", test)):
-        print(f"{name}: mean net return {path.net_returns.mean():.3%} per week, "
-              f"Sharpe {path.sharpe:.3f} per week, turnover {path.turnover.sum():.2f}, "
-              f"fees {path.fees.sum():.3%}")
+    # Daily features: row d only uses closes up to day d.
+    names = ["momentum_28d_a0", "momentum_28d_a1", "momentum_7d_a0",
+             "volatility_28d_a0", "noise"]
+    features = np.full((days, len(names)), np.nan)
+    features[28:, 0] = closes[28:, 0] / closes[:-28, 0] - 1
+    features[28:, 1] = closes[28:, 1] / closes[:-28, 1] - 1
+    features[7:, 2] = closes[7:, 0] / closes[:-7, 0] - 1
+    daily_a0 = closes[1:, 0] / closes[:-1, 0] - 1
+    features[28:, 3] = np.lib.stride_tricks.sliding_window_view(daily_a0, 28).std(axis=1)
+    features[:, 4] = rng.normal(size=days)
 
-    current_features = np.array([[0.8, -0.2]])
-    current_weights = test.final_holdings[None, :]
-    target = tree.predict_weights(current_features, current_weights, covariance)
-    print("Leaf scores:", tree.predict_returns(current_features)[0])
-    print("Target weights:", target[0])
-    print("Weight changes:", (target - current_weights)[0])
+    # One row per Monday close; the last 52 weeks are the test year.
+    rows = weekly_rows(dates, closes, features)
+    portfolio = PortfolioOptimizer(n_assets=3, config=PortfolioConfig(
+        max_weight=1.0, fee_rate=0.001, risk_aversion=1.0,
+    ))
+    config = TreeConfig(max_depth=2, min_samples_leaf=20, max_thresholds=None, verbose=True)
+    tree, train_paths, test_paths = train_and_test(portfolio, config, rows, test_periods=52)
+    tree.describe(names)
+    print(f"\nTrain: {len(train_paths['SPO tree'].net_returns)} weeks, annualized")
+    print(performance_report(train_paths))
+    print(f"\nTest: {len(test_paths['SPO tree'].net_returns)} weeks, annualized, "
+          f"holdings carried over from training")
+    print(performance_report(test_paths))
+
+    holdings = test_paths["SPO tree"].final_holdings
+    target = tree.predict_weights(features[-1:], holdings[None, :],
+                                  weekly_covariance(closes, days - 1))
+    print("\nLive decision at the last close: holdings", np.round(holdings, 3),
+          "-> target", np.round(target[0], 3))
     print("Synthetic demonstration only; no market data or orders are sent.")
 
 
