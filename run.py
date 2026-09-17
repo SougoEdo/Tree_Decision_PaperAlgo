@@ -1,29 +1,38 @@
+import numpy as np
+
 from main import (
     PortfolioConfig,
     PortfolioOptimizer,
     TreeConfig,
     SPOPortfolioTree,
+    weekly_covariance,
+    weekly_rows,
 )
 
 
 def load_data():
-    """Return aligned arrays, one row per decision date, in time order.
+    """Return daily data in time order, one row per calendar day (no gaps).
 
-    X_train:     (observations, features), known before each decision
-    R_train:     (observations, assets), simple returns over the next holding period
-    Sigma_train: (observations, assets, assets), covariance of the next
-                 holding-period returns, estimated from past data only
-    X_live:      (1, features), latest features
-    U_live:      (1, assets), current weights
-    Sigma_live:  (1, assets, assets), latest covariance estimate
+    dates:           (days,) numpy datetime64 or 'YYYY-MM-DD' strings
+    closes:          (days, assets) daily closing prices, same asset order everywhere
+    daily_features:  (days, features), row d computed from data up to day d only
+                     (NaN is fine during warm-up, before the first decision)
+    current_weights: (assets,) holdings now, for the live decision, summing to 1
     """
     raise NotImplementedError("Fill in load_data() in run.py with your data.")
 
 
-X_train, R_train, Sigma_train, X_live, U_live, Sigma_live = load_data()
+dates, closes, daily_features, current_weights = load_data()
+
+# One row per Monday close, with 180 days of returns behind it; the last
+# 52 weeks are held out to test the tree after training.
+rows = weekly_rows(dates, closes, daily_features, weekday=0, window=180)
+test_weeks = 52
+train = slice(0, len(rows.R) - test_weeks)
+test = slice(len(rows.R) - test_weeks, None)
 
 portfolio = PortfolioOptimizer(
-    n_assets=R_train.shape[1],
+    n_assets=rows.R.shape[1],
     config=PortfolioConfig(
         max_weight=1.0,       # Long-only, fully invested; cap per asset
         fee_rate=0.001,       # Illustrative; replace with your fees
@@ -45,11 +54,18 @@ tree = SPOPortfolioTree(
     ),
 )
 
-tree.fit(X_train, R_train, Sigma_train)   # holdings start from equal weights
+tree.fit(rows.X[train], rows.R[train], rows.Sigma[train])   # holdings start from equal weights
 tree.describe()
-train_path = tree.replay(X_train, R_train, Sigma_train)
-print(f"Training Sharpe per period: {train_path.sharpe:.3f}")
+train_path = tree.replay(rows.X[train], rows.R[train], rows.Sigma[train])
+test_path = tree.replay(rows.X[test], rows.R[test], rows.Sigma[test],
+                        initial_weights=train_path.final_holdings)
+for name, path in (("Train", train_path), ("Test", test_path)):
+    print(f"{name}: {len(path.net_returns)} weeks, mean net return "
+          f"{path.net_returns.mean():.3%} per week, Sharpe {path.sharpe:.3f} per week, "
+          f"turnover {path.turnover.sum():.2f}, fees {path.fees.sum():.3%}")
 
-# Both inputs are 2-D, even for one live decision.
-predicted_returns = tree.predict_returns(X_live)
-target_weights = tree.predict_weights(X_live, U_live, Sigma_live)
+# Live decision at the latest close (run on the decision weekday).
+X_live = np.asarray(daily_features, dtype=float)[-1:]
+Sigma_live = weekly_covariance(closes, len(closes) - 1, window=180)
+target_weights = tree.predict_weights(X_live, np.asarray(current_weights)[None, :], Sigma_live)
+print("Target weights:", target_weights[0])

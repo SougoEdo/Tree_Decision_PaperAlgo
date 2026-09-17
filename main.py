@@ -13,6 +13,8 @@ Arrays supplied by the caller (rows aligned and in time order):
            decision (predict_weights); training replays its own holdings.
 
 Use decimal returns: 0.01 means 1%. Use the same asset order everywhere.
+weekly_rows builds X, R and Sigma for weekly decisions from consecutive daily
+closes and your own daily features.
 
 Portfolio problem (long-only, fully invested, 2 to 4 assets):
     maximize    scores @ weights
@@ -35,12 +37,21 @@ lowers the decision regret and raises the Sharpe ratio of the replayed path, so
 splits that make the strategy flip between leaves and pay fees are rejected.
 Everything is measured on the training rows; validate on later rows with replay.
 
+TODO (known limitation, to address later): noise switches inside a split.
+The Sharpe check accepts or rejects a split as a whole. A split that is right
+on average but whose feature is noisy around its threshold is still accepted,
+and the strategy then switches leaves back and forth within a regime, paying
+fees each time (in a synthetic regime example, about three quarters of the
+fees came from leaf switches without a regime change). Options to evaluate:
+smoother features, a buffer zone around thresholds, partial adjustment towards
+the target (Decision-Induced Ranking paper), a turnover penalty in the path score.
+
 Leaf scores come from a bounded coordinate search on the empirical decision
 regret, started from the leaf's mean return; it is approximate, not a global
 solver. The fitted scores need not be calibrated expected-return forecasts.
 
 Read in order: configurations -> optimizer -> replay -> leaf fitting -> splits
--> demo.
+-> weekly rows -> demo.
 Based on the SPO-tree idea, not a reproduction of the papers' full experiments.
 """
 
@@ -434,6 +445,10 @@ class SPOPortfolioTree:
                 candidate = scores.copy()
                 candidate[left_rows], candidate[right_rows] = left.prediction, right.prediction
                 path = self._replay(candidate)
+                # TODO: a split is judged as a whole, so a profitable split whose
+                # feature is noisy around the threshold still gets in and pays
+                # fees on back-and-forth leaf switches ("noise switches" in the
+                # module docstring).
                 if path.sharpe > best_sharpe:  # a NaN Sharpe never qualifies
                     best_sharpe = path.sharpe
                     best = (position, feature, threshold, left, right,
@@ -578,7 +593,77 @@ class SPOPortfolioTree:
         visit(self.root)
 
 
-# 5. Runnable synthetic example. Replace X, R, Sigma with your aligned dataset.
+# 5. Weekly decision rows from consecutive daily closes.
+@dataclass(frozen=True)
+class WeeklyRows:
+    """Aligned inputs for fit and replay, one row per weekly decision."""
+    dates: np.ndarray          # (T,) decision dates: the daily close of the chosen weekday
+    day_index: np.ndarray      # (T,) position of each decision date in the daily arrays
+    X: np.ndarray | None       # (T, features) your daily features on the decision dates
+    R: np.ndarray              # (T, n) simple return from this decision close to the next
+    Sigma: np.ndarray          # (T, n, n) weekly covariance from past daily returns
+
+
+def weekly_covariance(closes, day, window=180, ridge=1e-6):
+    """Covariance of the next week's returns, estimated at the close of `day`.
+
+    Sample covariance of the `window` daily simple returns up to and including
+    that close, times 7 (daily returns treated as independent; crypto trades
+    every day), plus `ridge` on the diagonal.
+    """
+    P = finite_array(closes, "closes", 2)
+    if not isinstance(window, int) or window < 2 or not window <= day < len(P):
+        raise ValueError("Need window >= 2 daily returns before `day`, inside closes.")
+    if np.any(P[day - window:day + 1] <= 0) or ridge < 0:
+        raise ValueError("Closes must be positive and ridge nonnegative.")
+    daily = P[day - window + 1:day + 1] / P[day - window:day] - 1
+    covariance = np.cov(daily, rowvar=False).reshape(P.shape[1], P.shape[1])
+    return 7 * covariance + ridge * np.eye(P.shape[1])
+
+
+def weekly_rows(dates, closes, daily_features=None, weekday=0, window=180, ridge=1e-6):
+    """Rows for weekly decisions taken at the close of `weekday` (0 = Monday).
+
+    A weekday close becomes a decision row when `window` daily returns lie
+    behind it and a close one week later exists:
+      R[t]     = close one week later / close at the decision - 1
+      Sigma[t] = weekly_covariance at the decision close
+      X[t]     = daily_features at the decision date; row d of daily_features
+                 must use data up to day d only (NaN is fine before the first
+                 decision). X is None when no features are given.
+    Dates must be consecutive calendar days: fill or drop missing days first.
+    """
+    days = np.asarray(dates, dtype="datetime64[D]")
+    P = finite_array(closes, "closes", 2)
+    if days.shape != (len(P),):
+        raise ValueError("dates must be 1-D with one date per row of closes.")
+    if np.any(np.diff(days) != np.timedelta64(1, "D")):
+        raise ValueError("dates must be consecutive calendar days; fill or drop gaps first.")
+    if np.any(P <= 0):
+        raise ValueError("closes must be positive prices.")
+    if not isinstance(weekday, int) or not 0 <= weekday <= 6:
+        raise ValueError("weekday must be an integer from 0 (Monday) to 6 (Sunday).")
+    positions = np.arange(len(days))
+    day_of_week = (days.astype(np.int64) + 3) % 7   # 1970-01-01 was a Thursday
+    decisions = positions[(day_of_week == weekday) & (positions >= window)
+                          & (positions + 7 < len(days))]
+    if len(decisions) == 0:
+        raise ValueError("No weekly decision has a full covariance window and a next week.")
+    X = None
+    if daily_features is not None:
+        F = np.asarray(daily_features, dtype=float)
+        if F.ndim != 2 or len(F) != len(days):
+            raise ValueError("daily_features must be (days, features), aligned with dates.")
+        X = F[decisions]
+        if not np.isfinite(X).all():
+            raise ValueError("daily_features must be finite on every decision date.")
+    return WeeklyRows(
+        dates=days[decisions], day_index=decisions, X=X,
+        R=P[decisions + 7] / P[decisions] - 1,
+        Sigma=np.array([weekly_covariance(P, d, window, ridge) for d in decisions]))
+
+
+# 6. Runnable synthetic example. Replace X, R, Sigma with your aligned dataset.
 def demo():
     rng = np.random.default_rng(7)
     weeks = 156
