@@ -95,7 +95,7 @@ class ReplayTest(unittest.TestCase):
         optimizer = PortfolioOptimizer(2, PortfolioConfig(fee_rate=0.001, risk_aversion=50.0))
         tree = SPOPortfolioTree(optimizer, TreeConfig(
             max_depth=1, min_samples_leaf=10, search_passes=1, search_grid_size=3))
-        tree.fit(X, returns, np.full((40, 2), 0.5), covariance)
+        tree.fit(X, returns, covariance)
         path = tree.replay(X, returns, covariance)
         expected = replay_path(optimizer, tree.predict_returns(X), returns, covariance)
         np.testing.assert_array_equal(path.weights, expected.weights)

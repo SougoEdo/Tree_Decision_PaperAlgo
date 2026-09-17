@@ -4,12 +4,13 @@ Install:  python -m pip install numpy        (the tests also use scipy)
 Demo:     python main.py
 Tests:    python -m unittest discover -s tests
 
-Arrays supplied by the caller (all rows must be aligned):
+Arrays supplied by the caller (rows aligned and in time order):
     X:     (observations, features), available BEFORE the decision.
     R:     (observations, assets), subsequent SIMPLE holding-period returns.
-    U:     (observations, assets), actual or scenario PRE-TRADE weights (fees).
     Sigma: (observations, assets, assets), covariance of the holding-period
            returns, estimated only from data available BEFORE the decision.
+    U:     (observations, assets), current PRE-TRADE weights, only for a live
+           decision (predict_weights); training replays its own holdings.
 
 Use decimal returns: 0.01 means 1%. Use the same asset order everywhere.
 
@@ -26,10 +27,13 @@ replay_path (or SPOPortfolioTree.replay) trades a strategy period after period
 in row order: holdings drift with returns between rebalances, fees are paid on
 each trade, and it reports net returns, turnover, regret and the Sharpe ratio.
 
-Training is a fixed-state, one-period approximation: U stays fixed when
-comparing candidate trees. This is NOT a sequential trading backtest and does
-not generate the strategy's own historical holdings. Validate chronologically
-with replay_path, which does both.
+Training (fit) is path-aware and grows the tree best-first. Each round replays
+the current tree to get the holdings it would have had, screens every split of
+every leaf with mean leaf scores on those holdings, fits the scores of the best
+few, and replays the tree with each of them. A split is accepted only if it
+lowers the decision regret and raises the Sharpe ratio of the replayed path, so
+splits that make the strategy flip between leaves and pay fees are rejected.
+Everything is measured on the training rows; validate on later rows with replay.
 
 Leaf scores come from a bounded coordinate search on the empirical decision
 regret, started from the leaf's mean return; it is approximate, not a global
@@ -61,6 +65,8 @@ class TreeConfig:
     min_samples_leaf: int = 10
     max_thresholds: int | None = 10  # None tests every distinct partition
     min_regret_improvement: float = 1e-6  # average gain per observation at node
+    shortlist_size: int = 3       # screened splits per leaf that get a full fit and replay
+    min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
     prediction_bound: float = 0.10  # leaf scores restricted to +/- this
     search_passes: int = 3
     search_grid_size: int = 7
@@ -305,46 +311,169 @@ class Node:
     right: Node | None = None
 
 
-# 4. Train one tree by evaluating portfolio decisions at candidate splits.
+@dataclass(frozen=True)
+class SplitRecord:
+    """One accepted split, in the order training accepted them."""
+    depth: int
+    n_samples: int
+    feature: int
+    threshold: float
+    regret_gain: float      # regret reduction per row of the split leaf
+    sharpe_before: float    # Sharpe ratio of the replayed training path
+    sharpe_after: float
+
+
+# 4. Grow one tree on its own replayed training path.
 class SPOPortfolioTree:
     def __init__(self, optimizer: PortfolioOptimizer, config: TreeConfig):
         self.optimizer = optimizer
         self.config = config
         self.root = None
+        self.growth_log: list[SplitRecord] = []
         if (config.max_depth < 0 or config.min_samples_leaf < 1
                 or (config.max_thresholds is not None and config.max_thresholds < 1)
+                or config.shortlist_size < 1
                 or config.search_passes < 1 or config.search_grid_size < 3):
             raise ValueError("Invalid tree depth, leaf size, or search settings.")
-        if (not np.isfinite([config.min_regret_improvement,
+        if (not np.isfinite([config.min_regret_improvement, config.min_sharpe_improvement,
                              config.prediction_bound, config.regret_tolerance]).all()
-                or config.min_regret_improvement < 0 or config.prediction_bound <= 0
-                or config.regret_tolerance <= 0):
-            raise ValueError("Invalid prediction bound or regret tolerance.")
+                or config.min_regret_improvement < 0 or config.min_sharpe_improvement < 0
+                or config.prediction_bound <= 0 or config.regret_tolerance <= 0):
+            raise ValueError("Invalid improvement thresholds, prediction bound, "
+                             "or regret tolerance.")
 
-    def fit(self, X, R, U, Sigma):
-        """U and Sigma are explicit and stay fixed. No automatic dates or label shifting."""
-        self.root = None
+    def fit(self, X, R, Sigma, initial_weights=None):
+        """Grow the tree on chronological rows while it trades its own holdings.
+
+        initial_weights are the holdings before the first row (equal weights by
+        default). Each round replays the current tree, shortlists the
+        shortlist_size best splits of every leaf (mean child scores, regret from
+        the replayed holdings), fits their child scores, replays the tree with
+        each, and accepts the one with the highest Sharpe ratio if it beats the
+        current Sharpe by more than min_sharpe_improvement and lowers the regret
+        by more than min_regret_improvement per row. Finally every leaf score is
+        refit on the final holdings and kept only if the Sharpe does not drop.
+        """
+        self.root, self.growth_log = None, []
         X = finite_array(X, "X", 2)
         R = finite_array(R, "R", 2)
-        U = finite_array(U, "U", 2)
-        if (R.shape != U.shape or len(X) != len(R)
-                or R.shape[1] != self.optimizer.n_assets):
-            raise ValueError("Require X=(N,P) and R=U=(N,n_assets).")
-        Sigma = covariance_rows(Sigma, len(R), self.optimizer.n_assets)
+        n = self.optimizer.n_assets
+        if len(X) != len(R) or R.shape[1] != n:
+            raise ValueError("Require X=(N,P) and R=(N,n_assets).")
+        Sigma = covariance_rows(Sigma, len(R), n)
         self.n_features = X.shape[1]
-        self._X, self._R, self._U, self._S = X.copy(), R.copy(), U.copy(), Sigma.copy()
+        self._X, self._R, self._S = X.copy(), R.copy(), Sigma.copy()
+        self._initial_weights = initial_weights
         try:
+            # The root is scored from equal-weight holdings; from then on,
+            # regrets are measured from the holdings of the replayed tree.
+            rows = np.arange(len(X))
+            equal = np.full((len(X), n), 1.0 / n)
+            self._U = equal
             self._benchmarks = self.optimizer.utility(
-                R, self.optimizer.solve(R, U, Sigma), U, Sigma)
-            indices = np.arange(len(X))
-            root = self._fit_leaf(indices)
-            self.root = self._grow(root, indices, depth=0)
+                self._R, self.optimizer.solve(self._R, equal, self._S), equal, self._S)
+            root = self._fit_leaf(rows)
+            leaves = [(root, rows, 0)]
+            scores = np.tile(root.prediction, (len(X), 1))
+            path = self._replay(scores)
+            self._measure_from(path)
+            if self.config.verbose:
+                print(f"root: training Sharpe {path.sharpe:.4f}")
+            while True:
+                split = self._best_split(leaves, scores, path.sharpe)
+                if split is None:
+                    break
+                (position, feature, threshold, left, right,
+                 left_rows, right_rows, gain, new_path) = split
+                node, node_rows, depth = leaves.pop(position)
+                node.feature, node.threshold = feature, float(threshold)
+                node.left, node.right = left, right
+                leaves += [(left, left_rows, depth + 1), (right, right_rows, depth + 1)]
+                scores[left_rows], scores[right_rows] = left.prediction, right.prediction
+                self.growth_log.append(SplitRecord(
+                    depth, len(node_rows), feature, float(threshold), gain,
+                    path.sharpe, new_path.sharpe))
+                if self.config.verbose:
+                    print(f"split {len(self.growth_log)}: depth={depth}, "
+                          f"N={len(node_rows)}, x[{feature}] <= {threshold:.5g}, "
+                          f"regret -{gain:.3g} per row, "
+                          f"Sharpe {path.sharpe:.4f} -> {new_path.sharpe:.4f}")
+                path = new_path
+                self._measure_from(path)
+            self._refit_leaves(leaves, scores, path)
+            self.root = root
         finally:
             # Deployment uses the frozen tree, not stored training outcomes.
-            for name in ("_X", "_R", "_U", "_S", "_benchmarks"):
+            for name in ("_X", "_R", "_S", "_U", "_benchmarks", "_initial_weights"):
                 if hasattr(self, name):
                     delattr(self, name)
         return self
+
+    def _replay(self, scores):
+        """Replay per-row scores on the training rows (holdings used for regrets unchanged)."""
+        return replay_path(self.optimizer, scores, self._R, self._S, self._initial_weights)
+
+    def _measure_from(self, path):
+        """From now on, measure regrets from the holdings of this replayed path."""
+        self._U, self._benchmarks = path.holdings, path.utility + path.regret
+
+    def _best_split(self, leaves, scores, sharpe):
+        """The acceptable split with the highest replayed Sharpe, or None."""
+        c = self.config
+        best, best_sharpe = None, sharpe + c.min_sharpe_improvement
+        for position, (node, rows, depth) in enumerate(leaves):
+            if depth >= c.max_depth or len(rows) < 2 * c.min_samples_leaf:
+                continue
+            leaf_regret = self._score_prediction(node.prediction, rows)
+            for feature, threshold, left_rows, right_rows in self._shortlist(rows):
+                left = self._fit_leaf(left_rows, node.prediction)
+                right = self._fit_leaf(right_rows, node.prediction)
+                gain = (leaf_regret - left.regret_sum - right.regret_sum) / len(rows)
+                if gain <= c.min_regret_improvement:
+                    continue
+                candidate = scores.copy()
+                candidate[left_rows], candidate[right_rows] = left.prediction, right.prediction
+                path = self._replay(candidate)
+                if path.sharpe > best_sharpe:  # a NaN Sharpe never qualifies
+                    best_sharpe = path.sharpe
+                    best = (position, feature, threshold, left, right,
+                            left_rows, right_rows, gain, path)
+        return best
+
+    def _shortlist(self, rows):
+        """Cheap screen: rank a leaf's splits by their regret when each child
+        simply uses its clipped mean return as scores; keep the best few."""
+        c = self.config
+        screened = []
+        for feature in range(self.n_features):
+            values = self._X[rows, feature]
+            for threshold in self._thresholds(values):
+                left_rows, right_rows = rows[values <= threshold], rows[values > threshold]
+                if min(len(left_rows), len(right_rows)) < c.min_samples_leaf:
+                    continue
+                regret = sum(
+                    self._score_prediction(np.clip(self._R[part].mean(axis=0),
+                                                   -c.prediction_bound, c.prediction_bound),
+                                           part)
+                    for part in (left_rows, right_rows))
+                screened.append((regret, feature, threshold, left_rows, right_rows))
+        screened.sort(key=lambda split: split[0])
+        return [split[1:] for split in screened[:c.shortlist_size]]
+
+    def _refit_leaves(self, leaves, scores, path):
+        """Refit every leaf score on the final holdings; keep it if Sharpe holds."""
+        refits = [self._fit_leaf(rows, node.prediction) for node, rows, _ in leaves]
+        candidate = scores.copy()
+        for refit, (_, rows, _) in zip(refits, leaves):
+            candidate[rows] = refit.prediction
+        refit_path = self._replay(candidate)
+        kept = refit_path.sharpe >= path.sharpe
+        if kept:
+            for refit, (node, _, _) in zip(refits, leaves):
+                node.prediction, node.regret_sum = refit.prediction, refit.regret_sum
+        if self.config.verbose:
+            print(f"refit leaf scores: Sharpe {path.sharpe:.4f} -> "
+                  f"{refit_path.sharpe:.4f} ({'kept' if kept else 'discarded'})")
 
     def _score_prediction(self, prediction, indices):
         R, U, S = self._R[indices], self._U[indices], self._S[indices]
@@ -399,37 +528,6 @@ class SPOPortfolioTree:
             thresholds = thresholds[selected]
         return thresholds
 
-    def _grow(self, node, indices, depth):
-        c = self.config
-        if depth >= c.max_depth or len(indices) < 2 * c.min_samples_leaf:
-            return node
-        best_split, best_loss = None, node.regret_sum
-        for feature in range(self.n_features):
-            values = self._X[indices, feature]
-            for threshold in self._thresholds(values):
-                left_indices = indices[values <= threshold]
-                right_indices = indices[values > threshold]
-                if min(len(left_indices), len(right_indices)) < c.min_samples_leaf:
-                    continue
-                left = self._fit_leaf(left_indices, node.prediction)
-                right = self._fit_leaf(right_indices, node.prediction)
-                split_loss = left.regret_sum + right.regret_sum
-                if split_loss < best_loss:
-                    best_loss = split_loss
-                    best_split = (feature, threshold, left, right,
-                                  left_indices, right_indices)
-        gain = (node.regret_sum - best_loss) / len(indices)
-        if best_split is None or gain <= c.min_regret_improvement:
-            return node
-        feature, threshold, left, right, left_indices, right_indices = best_split
-        node.feature, node.threshold = feature, float(threshold)
-        if c.verbose:
-            print(f"depth={depth}, N={len(indices)}, feature={feature}, "
-                  f"threshold={threshold:.5g}, mean regret improvement={gain:.6g}")
-        node.left = self._grow(left, left_indices, depth + 1)
-        node.right = self._grow(right, right_indices, depth + 1)
-        return node
-
     def predict_returns(self, X):
         """Frozen leaf scores, with shape (observations, assets)."""
         if self.root is None:
@@ -459,21 +557,6 @@ class SPOPortfolioTree:
         return replay_path(self.optimizer, self.predict_returns(X), R, Sigma,
                            initial_weights)
 
-    def mean_regret(self, X, R, U, Sigma):
-        """Evaluate unseen fixed-state observations; does not refit the tree."""
-        R = finite_array(R, "R", 2)
-        U = finite_array(U, "U", 2)
-        weights = self.predict_weights(X, U, Sigma)
-        if R.shape != weights.shape:
-            raise ValueError("R shape must match predicted weights.")
-        Sigma = covariance_rows(Sigma, len(R), self.optimizer.n_assets)
-        benchmarks = self.optimizer.utility(
-            R, self.optimizer.solve(R, U, Sigma), U, Sigma)
-        regret = benchmarks - self.optimizer.utility(R, weights, U, Sigma)
-        if regret.min() < -self.config.regret_tolerance:
-            raise RuntimeError("Negative regret exceeds numerical tolerance.")
-        return float(np.maximum(regret, 0).mean())
-
     def describe(self, feature_names=None):
         """Print the frozen rules and leaf scores for inspection."""
         if self.root is None:
@@ -495,43 +578,44 @@ class SPOPortfolioTree:
         visit(self.root)
 
 
-# 5. Runnable synthetic example. Replace X, R, U, Sigma with your aligned dataset.
+# 5. Runnable synthetic example. Replace X, R, Sigma with your aligned dataset.
 def demo():
     rng = np.random.default_rng(7)
-    X = rng.normal(size=(36, 2))
-    # Expected returns flip with the sign of feature 0. The noise has a known
-    # covariance, used directly as Sigma (no estimation in this demo).
-    covariance = np.array([[1.6e-5, 0.8e-5],
-                           [0.8e-5, 1.6e-5]])
-    R = np.column_stack([
-        np.where(X[:, 0] > 0, 0.025, -0.015),
-        np.where(X[:, 0] > 0, -0.010, 0.020),
-    ]) + rng.multivariate_normal(np.zeros(2), covariance, size=36)
-    Sigma = np.broadcast_to(covariance, (36, 2, 2))
-    # Synthetic fully-invested states, NOT holdings generated by this strategy.
-    U = rng.dirichlet(np.ones(R.shape[1]), size=len(R))
+    weeks = 156
+    # A persistent market regime (alternating 13-week blocks) drives expected
+    # returns. feature_0 observes the regime with noise; feature_1 is pure noise.
+    regime = np.tile(np.repeat([1.0, -1.0], 13), 6)
+    X = np.column_stack([regime + rng.normal(0, 0.5, weeks), rng.normal(size=weeks)])
+    # Weekly volatility 3%, correlation 0.5. Used directly as Sigma here; a
+    # real run estimates it from past returns only.
+    covariance = np.array([[0.0009, 0.00045],
+                           [0.00045, 0.0009]])
+    means = np.where(regime[:, None] > 0, [0.010, -0.002], [-0.002, 0.010])
+    R = means + rng.multivariate_normal(np.zeros(2), covariance, size=weeks)
 
-    portfolio = PortfolioOptimizer(n_assets=R.shape[1], config=PortfolioConfig(
-        max_weight=1.0, fee_rate=0.001, risk_aversion=500.0,
+    portfolio = PortfolioOptimizer(n_assets=2, config=PortfolioConfig(
+        max_weight=1.0, fee_rate=0.001, risk_aversion=2.0,
     ))
+    # With a zero Sharpe margin, splits on pure noise can win in-sample; a
+    # margin of 0.05 per week ignores such small gains in this example.
     tree = SPOPortfolioTree(portfolio, TreeConfig(
-        max_depth=1, min_samples_leaf=6, max_thresholds=4,
-        prediction_bound=0.06, search_passes=2, search_grid_size=5,
-        verbose=True,
+        max_depth=2, min_samples_leaf=15, max_thresholds=None,
+        min_sharpe_improvement=0.05, prediction_bound=0.05,
+        search_passes=2, search_grid_size=5, verbose=True,
     ))
-    # Illustrates an ordered holdout, not realistic crypto time-series evidence.
-    cut = 24
-    tree.fit(X[:cut], R[:cut], U[:cut], Sigma[:cut])
+    # Two years to train; the third year tests, continuing the holdings.
+    cut = 104
+    tree.fit(X[:cut], R[:cut], covariance)
     tree.describe(["feature_0", "feature_1"])
-    print("Holdout mean regret (fixed states):",
-          round(tree.mean_regret(X[cut:], R[cut:], U[cut:], Sigma[cut:]), 6))
-    path = tree.replay(X[cut:], R[cut:], Sigma[cut:])
-    print(f"Holdout replay from equal weights: mean net return "
-          f"{path.net_returns.mean():.4%}, Sharpe {path.sharpe:.3f} per period, "
-          f"turnover {path.turnover.sum():.2f}, fees {path.fees.sum():.4%}")
+    train = tree.replay(X[:cut], R[:cut], covariance)
+    test = tree.replay(X[cut:], R[cut:], covariance, initial_weights=train.final_holdings)
+    for name, path in (("Train", train), ("Test", test)):
+        print(f"{name}: mean net return {path.net_returns.mean():.3%} per week, "
+              f"Sharpe {path.sharpe:.3f} per week, turnover {path.turnover.sum():.2f}, "
+              f"fees {path.fees.sum():.3%}")
 
     current_features = np.array([[0.8, -0.2]])
-    current_weights = np.array([[0.60, 0.40]])
+    current_weights = test.final_holdings[None, :]
     target = tree.predict_weights(current_features, current_weights, covariance)
     print("Leaf scores:", tree.predict_returns(current_features)[0])
     print("Target weights:", target[0])

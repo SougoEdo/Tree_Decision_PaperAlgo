@@ -1,0 +1,142 @@
+"""Checks for path-aware tree growth: regret screen, replays, Sharpe acceptance.
+
+Run from the project folder:  python -m unittest discover -s tests
+"""
+import unittest
+
+import numpy as np
+
+from main import PortfolioConfig, PortfolioOptimizer, SPOPortfolioTree, TreeConfig
+
+
+def regime_data(seed, weeks=120):
+    """Two assets whose better one alternates with a persistent 10-week regime.
+
+    x0 observes the regime with a little noise; x1 is pure noise.
+    """
+    rng = np.random.default_rng(seed)
+    regime = np.tile(np.repeat([1.0, -1.0], 10), weeks // 20)
+    X = np.column_stack([regime + rng.normal(0, 0.2, weeks), rng.normal(size=weeks)])
+    covariance = np.array([[0.0004, 0.0001], [0.0001, 0.0004]])
+    means = np.where(regime[:, None] > 0, [0.01, -0.005], [-0.005, 0.01])
+    returns = means + rng.multivariate_normal(np.zeros(2), covariance, weeks)
+    return X, returns, covariance, regime
+
+
+def make_tree(fee=0.001, risk_aversion=2.0, **settings):
+    optimizer = PortfolioOptimizer(2, PortfolioConfig(fee_rate=fee, risk_aversion=risk_aversion))
+    defaults = dict(max_depth=1, min_samples_leaf=20, max_thresholds=None,
+                    prediction_bound=0.05, search_passes=2, search_grid_size=5)
+    defaults.update(settings)
+    return SPOPortfolioTree(optimizer, TreeConfig(**defaults))
+
+
+def _parts(tree):
+    return tree.optimizer, tree.config
+
+
+def leaves(node, depth=0):
+    if node.feature is None:
+        return [(node, depth)]
+    return leaves(node.left, depth + 1) + leaves(node.right, depth + 1)
+
+
+class PathAwareTreeTest(unittest.TestCase):
+    def test_splits_on_the_regime_feature_and_raises_the_sharpe(self):
+        X, returns, covariance, regime = regime_data(seed=0)
+        tree = make_tree().fit(X, returns, covariance)
+        self.assertEqual(len(tree.growth_log), 1)
+        split = tree.growth_log[0]
+        self.assertEqual(split.feature, 0)
+        self.assertGreater(split.sharpe_after, split.sharpe_before + 0.1)
+        # The threshold may fit some noise in-sample, but it must separate the
+        # two regimes for the vast majority of weeks.
+        agreement = np.mean((X[:, 0] <= split.threshold) == (regime < 0))
+        self.assertGreaterEqual(agreement, 0.9)
+
+    def test_rejects_weekly_flipping_once_fees_exceed_the_edge(self):
+        # The feature flips sign every week and so does the better asset, by
+        # 0.8% each way. Following it earns 0.8% a week but a full swap every
+        # week costs 2 * fee: worth it without fees, not at a 0.5% fee.
+        weeks = 120
+        rng = np.random.default_rng(0)
+        flip = np.where(np.arange(weeks) % 2 == 0, 1.0, -1.0)
+        X = (flip + rng.normal(0, 0.01, weeks))[:, None]
+        returns = flip[:, None] * np.array([0.008, -0.008]) + rng.normal(0, 0.002, (weeks, 2))
+        covariance = 4e-6 * np.eye(2)
+        free = make_tree(fee=0.0, risk_aversion=1.0, max_thresholds=5)
+        costly = make_tree(fee=0.005, risk_aversion=1.0, max_thresholds=5)
+        self.assertGreater(free.fit(X, returns, covariance)
+                           .replay(X, returns, covariance).turnover.sum(), 200)
+        self.assertLess(costly.fit(X, returns, covariance)
+                        .replay(X, returns, covariance).turnover.sum(), 5)
+
+    def test_every_accepted_split_raises_the_training_sharpe(self):
+        X, returns, covariance, _ = regime_data(seed=1)
+        margin = 0.01
+        tree = make_tree(max_depth=2, min_samples_leaf=15, min_sharpe_improvement=margin)
+        tree.fit(X, returns, covariance)
+        log = tree.growth_log
+        self.assertGreaterEqual(len(log), 1)
+        for record in log:
+            self.assertGreater(record.sharpe_after, record.sharpe_before + margin)
+        for earlier, later in zip(log, log[1:]):
+            self.assertEqual(later.sharpe_before, earlier.sharpe_after)
+        # The final refit of leaf scores is kept only if it does not lower the Sharpe.
+        self.assertGreaterEqual(tree.replay(X, returns, covariance).sharpe,
+                                log[-1].sharpe_after - 1e-12)
+
+    def test_a_large_sharpe_margin_blocks_every_split(self):
+        X, returns, covariance, _ = regime_data(seed=0)
+        tree = make_tree(max_depth=2, min_sharpe_improvement=10.0).fit(X, returns, covariance)
+        self.assertEqual(tree.growth_log, [])
+        self.assertIsNone(tree.root.feature)
+        scores = tree.predict_returns(X)
+        np.testing.assert_array_equal(scores, np.tile(tree.root.prediction, (len(X), 1)))
+
+    def test_a_refit_that_lowers_the_sharpe_is_discarded(self):
+        X, returns, covariance, _ = regime_data(seed=0)
+
+        class SabotagedRefit(SPOPortfolioTree):
+            """Negates every refit leaf score, which must hurt the Sharpe."""
+            def _refit_leaves(self, leaves, scores, path):
+                self.scores_before_refit = scores.copy()
+                self.refitting = True
+                super()._refit_leaves(leaves, scores, path)
+
+            def _fit_leaf(self, indices, parent_prediction=None):
+                node = super()._fit_leaf(indices, parent_prediction)
+                if getattr(self, "refitting", False):
+                    node.prediction = -node.prediction
+                return node
+
+        tree = SabotagedRefit(*_parts(make_tree())).fit(X, returns, covariance)
+        np.testing.assert_array_equal(tree.predict_returns(X), tree.scores_before_refit)
+
+    def test_a_large_regret_threshold_blocks_every_split(self):
+        X, returns, covariance, _ = regime_data(seed=0)
+        tree = make_tree(max_depth=2, min_regret_improvement=1.0).fit(X, returns, covariance)
+        self.assertEqual(tree.growth_log, [])
+        self.assertIsNone(tree.root.feature)
+
+    def test_leaves_respect_depth_and_size_limits(self):
+        X, returns, covariance, _ = regime_data(seed=2)
+        tree = make_tree(max_depth=2, min_samples_leaf=25).fit(X, returns, covariance)
+        found = leaves(tree.root)
+        self.assertEqual(sum(node.n_samples for node, _ in found), len(X))
+        for node, depth in found:
+            self.assertLessEqual(depth, 2)
+            self.assertGreaterEqual(node.n_samples, 25)
+        for name in ("_X", "_R", "_S", "_U", "_benchmarks"):
+            self.assertFalse(hasattr(tree, name))   # no training data kept after fit
+
+    def test_invalid_tree_settings_are_rejected(self):
+        optimizer = PortfolioOptimizer(2, PortfolioConfig())
+        with self.assertRaises(ValueError):
+            SPOPortfolioTree(optimizer, TreeConfig(shortlist_size=0))
+        with self.assertRaises(ValueError):
+            SPOPortfolioTree(optimizer, TreeConfig(min_sharpe_improvement=-0.1))
+
+
+if __name__ == "__main__":
+    unittest.main()

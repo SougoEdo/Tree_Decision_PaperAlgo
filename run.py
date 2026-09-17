@@ -7,11 +7,10 @@ from main import (
 
 
 def load_data():
-    """Return aligned arrays, one row per decision date.
+    """Return aligned arrays, one row per decision date, in time order.
 
     X_train:     (observations, features), known before each decision
     R_train:     (observations, assets), simple returns over the next holding period
-    U_train:     (observations, assets), pre-trade weights
     Sigma_train: (observations, assets, assets), covariance of the next
                  holding-period returns, estimated from past data only
     X_live:      (1, features), latest features
@@ -21,7 +20,7 @@ def load_data():
     raise NotImplementedError("Fill in load_data() in run.py with your data.")
 
 
-X_train, R_train, U_train, Sigma_train, X_live, U_live, Sigma_live = load_data()
+X_train, R_train, Sigma_train, X_live, U_live, Sigma_live = load_data()
 
 portfolio = PortfolioOptimizer(
     n_assets=R_train.shape[1],
@@ -37,15 +36,19 @@ tree = SPOPortfolioTree(
     config=TreeConfig(
         max_depth=2,
         min_samples_leaf=20,
-        max_thresholds=10,       # None tests every threshold: too slow with fees
-        prediction_bound=0.10,   # Leaf scores bounded to ±10%
+        max_thresholds=None,         # Every threshold; affordable with screening
+        min_sharpe_improvement=0.0,  # Raise (e.g. 0.05 per week) to ignore small in-sample gains
+        prediction_bound=0.10,       # Leaf scores bounded to ±10%
         search_passes=3,
         search_grid_size=7,
+        verbose=True,
     ),
 )
 
-tree.fit(X_train, R_train, U_train, Sigma_train)
+tree.fit(X_train, R_train, Sigma_train)   # holdings start from equal weights
 tree.describe()
+train_path = tree.replay(X_train, R_train, Sigma_train)
+print(f"Training Sharpe per period: {train_path.sharpe:.3f}")
 
 # Both inputs are 2-D, even for one live decision.
 predicted_returns = tree.predict_returns(X_live)
