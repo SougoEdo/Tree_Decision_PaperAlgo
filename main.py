@@ -22,16 +22,21 @@ Portfolio problem (long-only, fully invested, 2 to 4 assets):
 PortfolioOptimizer solves it exactly. Borrow costs, funding, market impact,
 and execution are NOT modeled.
 
+replay_path (or SPOPortfolioTree.replay) trades a strategy period after period
+in row order: holdings drift with returns between rebalances, fees are paid on
+each trade, and it reports net returns, turnover, regret and the Sharpe ratio.
+
 Training is a fixed-state, one-period approximation: U stays fixed when
 comparing candidate trees. This is NOT a sequential trading backtest and does
 not generate the strategy's own historical holdings. Validate chronologically
-and then run a separate sequential simulation with drifted holdings and costs.
+with replay_path, which does both.
 
 Leaf scores come from a bounded coordinate search on the empirical decision
 regret, started from the leaf's mean return; it is approximate, not a global
 solver. The fitted scores need not be calibrated expected-return forecasts.
 
-Read in order: configurations -> optimizer -> leaf fitting -> splits -> demo.
+Read in order: configurations -> optimizer -> replay -> leaf fitting -> splits
+-> demo.
 Based on the SPO-tree idea, not a reproduction of the papers' full experiments.
 """
 
@@ -72,6 +77,17 @@ def finite_array(value, name, ndim):
     if result.ndim != ndim or result.size == 0 or not np.isfinite(result).all():
         raise ValueError(f"{name} must be a nonempty, finite {ndim}-D array.")
     return result
+
+
+def covariance_rows(Sigma, rows, n_assets):
+    """Accept one (n, n) covariance for every row, or one per row."""
+    Sigma = np.asarray(Sigma, dtype=float)
+    if Sigma.shape == (n_assets, n_assets):
+        Sigma = np.broadcast_to(Sigma, (rows, n_assets, n_assets))
+    if Sigma.shape != (rows, n_assets, n_assets):
+        raise ValueError("Sigma must have shape (n_assets, n_assets) "
+                         "or (N, n_assets, n_assets).")
+    return Sigma
 
 
 # 2. A deterministic portfolio optimizer: it is solved, never trained.
@@ -211,6 +227,73 @@ class PortfolioOptimizer:
         return c, u, S, single
 
 
+# 3. Replay a strategy through time: holdings drift, every trade pays fees.
+@dataclass(frozen=True)
+class PathResult:
+    """What a strategy did in each period, in row order."""
+    holdings: np.ndarray        # (T, n) pre-trade weights, drifted from the last period
+    weights: np.ndarray         # (T, n) post-trade weights held over the period
+    turnover: np.ndarray        # (T,) sum(|weights - holdings|)
+    fees: np.ndarray            # (T,) fee_rate @ |weights - holdings|, fraction of equity
+    gross_returns: np.ndarray   # (T,) returns @ weights
+    net_returns: np.ndarray     # (T,) gross_returns - fees
+    utility: np.ndarray         # (T,) net_returns - risk_aversion * weights @ Sigma @ weights
+    regret: np.ndarray          # (T,) best utility in hindsight from the same holdings - utility
+    final_holdings: np.ndarray  # (n,) drifted weights after the last period
+
+    @property
+    def sharpe(self) -> float:
+        """Per-period Sharpe ratio of net returns; NaN with fewer than 2 periods."""
+        if len(self.net_returns) < 2:
+            return float("nan")
+        std = self.net_returns.std(ddof=1)
+        return float(self.net_returns.mean() / std) if std > 0 else float("nan")
+
+
+def replay_path(optimizer, scores, returns, covariance, initial_weights=None):
+    """Trade period by period, in row order (rows must be chronological).
+
+    In period t the optimizer turns scores[t] into weights w_t, starting from
+    the holdings u_t. Fees are charged on |w_t - u_t| and subtracted from the
+    period return (the tiny fees-times-return cross term is ignored). Holdings
+    then drift with the returns: u_{t+1} = w_t * (1 + r_t) / (1 + r_t @ w_t).
+    The first holdings are equal weights unless initial_weights is given, e.g.
+    the final_holdings of a previous path.
+    """
+    n = optimizer.n_assets
+    C = finite_array(scores, "scores", 2)
+    R = finite_array(returns, "returns", 2)
+    if C.shape != R.shape or C.shape[1] != n:
+        raise ValueError("scores and returns must both have shape (T, n_assets).")
+    if np.any(R <= -1):
+        raise ValueError("Simple returns must be greater than -1.")
+    S = covariance_rows(covariance, len(R), n)
+    if initial_weights is None:
+        u = np.full(n, 1.0 / n)
+    else:
+        u = finite_array(initial_weights, "initial_weights", 1)
+        if u.shape != (n,) or np.any(u < 0) or abs(u.sum() - 1) > 1e-6:
+            raise ValueError("initial_weights must be n_assets nonnegative "
+                             "weights summing to 1.")
+        u = u / u.sum()
+
+    holdings, weights = np.empty_like(R), np.empty_like(R)
+    for t in range(len(R)):
+        holdings[t] = u
+        weights[t] = optimizer.solve(C[t], u, S[t])
+        grown = weights[t] * (1 + R[t])
+        u = grown / grown.sum()          # grown.sum() == 1 + r_t @ w_t
+
+    trades = np.abs(weights - holdings)
+    fees = trades @ optimizer.fees
+    gross = np.einsum("ti,ti->t", R, weights)
+    utility = optimizer.utility(R, weights, holdings, S)
+    best = optimizer.utility(R, optimizer.solve(R, holdings, S), holdings, S)
+    return PathResult(holdings=holdings, weights=weights, turnover=trades.sum(axis=1),
+                      fees=fees, gross_returns=gross, net_returns=gross - fees,
+                      utility=utility, regret=best - utility, final_holdings=u)
+
+
 @dataclass
 class Node:
     prediction: np.ndarray
@@ -222,7 +305,7 @@ class Node:
     right: Node | None = None
 
 
-# 3. Train one tree by evaluating portfolio decisions at candidate splits.
+# 4. Train one tree by evaluating portfolio decisions at candidate splits.
 class SPOPortfolioTree:
     def __init__(self, optimizer: PortfolioOptimizer, config: TreeConfig):
         self.optimizer = optimizer
@@ -247,7 +330,7 @@ class SPOPortfolioTree:
         if (R.shape != U.shape or len(X) != len(R)
                 or R.shape[1] != self.optimizer.n_assets):
             raise ValueError("Require X=(N,P) and R=U=(N,n_assets).")
-        Sigma = self._covariance_rows(Sigma, len(R))
+        Sigma = covariance_rows(Sigma, len(R), self.optimizer.n_assets)
         self.n_features = X.shape[1]
         self._X, self._R, self._U, self._S = X.copy(), R.copy(), U.copy(), Sigma.copy()
         try:
@@ -262,17 +345,6 @@ class SPOPortfolioTree:
                 if hasattr(self, name):
                     delattr(self, name)
         return self
-
-    def _covariance_rows(self, Sigma, rows):
-        """Accept one (n, n) covariance for every row, or one per row."""
-        n = self.optimizer.n_assets
-        Sigma = np.asarray(Sigma, dtype=float)
-        if Sigma.shape == (n, n):
-            Sigma = np.broadcast_to(Sigma, (rows, n, n))
-        if Sigma.shape != (rows, n, n):
-            raise ValueError("Sigma must have shape (n_assets, n_assets) "
-                             "or (N, n_assets, n_assets).")
-        return Sigma
 
     def _score_prediction(self, prediction, indices):
         R, U, S = self._R[indices], self._U[indices], self._S[indices]
@@ -379,7 +451,13 @@ class SPOPortfolioTree:
         U = finite_array(U, "U", 2)
         if U.shape != predictions.shape:
             raise ValueError("U must have one holdings vector per prediction.")
-        return self.optimizer.solve(predictions, U, self._covariance_rows(Sigma, len(U)))
+        Sigma = covariance_rows(Sigma, len(U), self.optimizer.n_assets)
+        return self.optimizer.solve(predictions, U, Sigma)
+
+    def replay(self, X, R, Sigma, initial_weights=None):
+        """Trade the frozen tree through the rows of X in order; see replay_path."""
+        return replay_path(self.optimizer, self.predict_returns(X), R, Sigma,
+                           initial_weights)
 
     def mean_regret(self, X, R, U, Sigma):
         """Evaluate unseen fixed-state observations; does not refit the tree."""
@@ -388,7 +466,7 @@ class SPOPortfolioTree:
         weights = self.predict_weights(X, U, Sigma)
         if R.shape != weights.shape:
             raise ValueError("R shape must match predicted weights.")
-        Sigma = self._covariance_rows(Sigma, len(R))
+        Sigma = covariance_rows(Sigma, len(R), self.optimizer.n_assets)
         benchmarks = self.optimizer.utility(
             R, self.optimizer.solve(R, U, Sigma), U, Sigma)
         regret = benchmarks - self.optimizer.utility(R, weights, U, Sigma)
@@ -417,7 +495,7 @@ class SPOPortfolioTree:
         visit(self.root)
 
 
-# 4. Runnable synthetic example. Replace X, R, U, Sigma with your aligned dataset.
+# 5. Runnable synthetic example. Replace X, R, U, Sigma with your aligned dataset.
 def demo():
     rng = np.random.default_rng(7)
     X = rng.normal(size=(36, 2))
@@ -447,6 +525,10 @@ def demo():
     tree.describe(["feature_0", "feature_1"])
     print("Holdout mean regret (fixed states):",
           round(tree.mean_regret(X[cut:], R[cut:], U[cut:], Sigma[cut:]), 6))
+    path = tree.replay(X[cut:], R[cut:], Sigma[cut:])
+    print(f"Holdout replay from equal weights: mean net return "
+          f"{path.net_returns.mean():.4%}, Sharpe {path.sharpe:.3f} per period, "
+          f"turnover {path.turnover.sum():.2f}, fees {path.fees.sum():.4%}")
 
     current_features = np.array([[0.8, -0.2]])
     current_weights = np.array([[0.60, 0.40]])
