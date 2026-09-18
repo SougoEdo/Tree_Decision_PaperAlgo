@@ -1,6 +1,6 @@
 """Readable SPO portfolio tree using only NumPy.
 
-Install:  python -m pip install numpy        (the tests also use scipy)
+Install:  python -m pip install numpy, scipy 
 Demo:     python main.py
 Tests:    python -m unittest discover -s tests
 
@@ -35,9 +35,10 @@ without splits and with an equal-weight portfolio, on training and test rows
 
 Training (fit) is path-aware and grows the tree best-first. Each round replays
 the current tree to get the holdings it would have had, screens every split of
-every leaf with mean leaf scores on those holdings, fits the scores of the best
-few, and replays the tree with each of them. A split is accepted only if it
-lowers the decision regret and raises the Sharpe ratio of the replayed path, so
+every leaf with mean leaf scores on those holdings, and fits the scores of the
+best few. The decision regret chooses the split: the one with the largest regret
+reduction, measured against its leaf refitted on the same holdings. It is
+accepted only if it also raises the Sharpe ratio of the replayed path, so
 splits that make the strategy flip between leaves and pay fees are rejected.
 Everything is measured on the training rows; validate on later rows with replay.
 
@@ -383,7 +384,7 @@ class SplitRecord:
     n_samples: int
     feature: int
     threshold: float
-    regret_gain: float      # regret reduction per row of the split leaf
+    regret_gain: float      # regret reduction per row of the split leaf, vs the refitted leaf
     sharpe_before: float    # Sharpe ratio of the replayed training path
     sharpe_after: float
 
@@ -413,11 +414,13 @@ class SPOPortfolioTree:
         initial_weights are the holdings before the first row (equal weights by
         default). Each round replays the current tree, shortlists the
         shortlist_size best splits of every leaf (mean child scores, regret from
-        the replayed holdings), fits their child scores, replays the tree with
-        each, and accepts the one with the highest Sharpe ratio if it beats the
-        current Sharpe by more than min_sharpe_improvement and lowers the regret
-        by more than min_regret_improvement per row. Finally every leaf score is
-        refit on the final holdings and kept only if the Sharpe does not drop.
+        the replayed holdings) and fits their child scores. A split's regret
+        reduction is measured against its leaf refitted on the same holdings,
+        and must exceed min_regret_improvement per row. The split with the
+        largest reduction is replayed and accepted if the Sharpe ratio beats the
+        current one by more than min_sharpe_improvement; otherwise the next
+        largest is tried. Finally every leaf score is refit on the final
+        holdings and kept only if the Sharpe does not drop.
         """
         self.root, self.growth_log = None, []
         X = finite_array(X, "X", 2)
@@ -483,31 +486,41 @@ class SPOPortfolioTree:
         self._U, self._benchmarks = path.holdings, path.utility + path.regret
 
     def _best_split(self, leaves, scores, sharpe):
-        """The acceptable split with the highest replayed Sharpe, or None."""
+        """The split with the largest regret reduction that also raises the
+        replayed Sharpe, or None."""
         c = self.config
-        best, best_sharpe = None, sharpe + c.min_sharpe_improvement
+        candidates = []
         for position, (node, rows, depth) in enumerate(leaves):
             if depth >= c.max_depth or len(rows) < 2 * c.min_samples_leaf:
                 continue
-            leaf_regret = self._score_prediction(node.prediction, rows)
+            # Compare like with like. The leaf's scores were fitted on the
+            # holdings of an earlier tree, so refit them on the current holdings
+            # before measuring what two leaves add over one.
+            parent = self._fit_leaf(rows, node.prediction)
             for feature, threshold, left_rows, right_rows in self._shortlist(rows):
-                left = self._fit_leaf(left_rows, node.prediction)
-                right = self._fit_leaf(right_rows, node.prediction)
-                gain = (leaf_regret - left.regret_sum - right.regret_sum) / len(rows)
-                if gain <= c.min_regret_improvement:
-                    continue
-                candidate = scores.copy()
-                candidate[left_rows], candidate[right_rows] = left.prediction, right.prediction
-                path = self._replay(candidate)
-                # TODO: a split is judged as a whole, so a profitable split whose
-                # feature is noisy around the threshold still gets in and pays
-                # fees on back-and-forth leaf switches ("noise switches" in the
-                # module docstring).
-                if path.sharpe > best_sharpe:  # a NaN Sharpe never qualifies
-                    best_sharpe = path.sharpe
-                    best = (position, feature, threshold, left, right,
-                            left_rows, right_rows, gain, path)
-        return best
+                left = self._fit_leaf(left_rows, parent.prediction)
+                right = self._fit_leaf(right_rows, parent.prediction)
+                reduction = parent.regret_sum - left.regret_sum - right.regret_sum
+                if reduction / len(rows) > c.min_regret_improvement:
+                    candidates.append((reduction, position, feature, threshold,
+                                       left, right, left_rows, right_rows))
+        # The SPO loss chooses (largest total regret reduction over all leaves,
+        # as in SPOT); the replayed Sharpe must confirm, else the next one is tried.
+        candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+        for (reduction, position, feature, threshold,
+             left, right, left_rows, right_rows) in candidates:
+            candidate = scores.copy()
+            candidate[left_rows], candidate[right_rows] = left.prediction, right.prediction
+            path = self._replay(candidate)
+            # TODO: a split is judged as a whole, so a profitable split whose
+            # feature is noisy around the threshold still gets in and pays
+            # fees on back-and-forth leaf switches ("noise switches" in the
+            # module docstring).
+            if path.sharpe > sharpe + c.min_sharpe_improvement:  # NaN never qualifies
+                gain = reduction / len(leaves[position][1])
+                return (position, feature, threshold, left, right,
+                        left_rows, right_rows, gain, path)
+        return None
 
     def _shortlist(self, rows):
         """Cheap screen: rank a leaf's splits by their regret when each child

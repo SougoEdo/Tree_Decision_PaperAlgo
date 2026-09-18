@@ -35,6 +35,47 @@ def _parts(tree):
     return tree.optimizer, tree.config
 
 
+class SplitProbe(SPOPortfolioTree):
+    """Records what the first round of growth saw: every shortlisted split of the
+    root with its regret reduction and replayed Sharpe, and the fallback scores
+    handed to each leaf fit."""
+
+    def _best_split(self, leaves, scores, sharpe):
+        first_round = not hasattr(self, "candidates")
+        if first_round:
+            node, rows, _ = leaves[0]
+            self.stale_prediction = node.prediction.copy()
+            parent = self._fit_leaf(rows, node.prediction)
+            self.refitted_prediction = parent.prediction.copy()
+            self.sharpe_before, self.candidates, self.fallbacks = sharpe, [], []
+            for feature, threshold, left_rows, right_rows in self._shortlist(rows):
+                left = self._fit_leaf(left_rows, parent.prediction)
+                right = self._fit_leaf(right_rows, parent.prediction)
+                replayed = scores.copy()
+                replayed[left_rows], replayed[right_rows] = left.prediction, right.prediction
+                self.candidates.append({
+                    "split": (feature, float(threshold)),
+                    "reduction": parent.regret_sum - left.regret_sum - right.regret_sum,
+                    "sharpe": self._replay(replayed).sharpe})
+        self.recording = first_round
+        choice = super()._best_split(leaves, scores, sharpe)
+        self.recording = False
+        return choice
+
+    def _fit_leaf(self, indices, parent_prediction=None):
+        if getattr(self, "recording", False):
+            self.fallbacks.append((len(indices), parent_prediction.copy()))
+        return super()._fit_leaf(indices, parent_prediction)
+
+
+def probed_tree():
+    """Seed 4: the largest regret reduction and the highest Sharpe are different
+    splits, and refitting the root on the replayed holdings changes its scores."""
+    X, returns, covariance, _ = regime_data(seed=4)
+    tree = SplitProbe(*_parts(make_tree(shortlist_size=8))).fit(X, returns, covariance)
+    return tree, len(X)
+
+
 def leaves(node, depth=0):
     if node.feature is None:
         return [(node, depth)]
@@ -70,6 +111,29 @@ class PathAwareTreeTest(unittest.TestCase):
                            .replay(X, returns, covariance).turnover.sum(), 200)
         self.assertLess(costly.fit(X, returns, covariance)
                         .replay(X, returns, covariance).turnover.sum(), 5)
+
+    def test_the_largest_regret_reduction_wins_among_splits_that_raise_the_sharpe(self):
+        tree, n_rows = probed_tree()
+        passing = [c for c in tree.candidates if c["sharpe"] > tree.sharpe_before]
+        by_regret = max(passing, key=lambda c: c["reduction"])
+        by_sharpe = max(passing, key=lambda c: c["sharpe"])
+        self.assertNotEqual(by_regret["split"], by_sharpe["split"])   # the two rules differ here
+        chosen = tree.growth_log[0]
+        self.assertEqual((chosen.feature, chosen.threshold), by_regret["split"])
+        # The logged gain is measured against the root refitted on the same holdings.
+        self.assertAlmostEqual(chosen.regret_gain, by_regret["reduction"] / n_rows, places=12)
+
+    def test_children_are_compared_with_their_leaf_refitted_on_the_same_holdings(self):
+        tree, n_rows = probed_tree()
+        self.assertFalse(np.array_equal(tree.stale_prediction, tree.refitted_prediction))
+        # First the whole leaf is refitted, starting from its old scores...
+        self.assertEqual(tree.fallbacks[0][0], n_rows)
+        np.testing.assert_array_equal(tree.fallbacks[0][1], tree.stale_prediction)
+        # ...then every child is fitted with the refitted scores as its fallback.
+        self.assertGreater(len(tree.fallbacks), 1)
+        for size, fallback in tree.fallbacks[1:]:
+            self.assertLess(size, n_rows)
+            np.testing.assert_array_equal(fallback, tree.refitted_prediction)
 
     def test_every_accepted_split_raises_the_training_sharpe(self):
         X, returns, covariance, _ = regime_data(seed=1)
