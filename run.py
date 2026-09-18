@@ -32,7 +32,7 @@ portfolio = PortfolioOptimizer(
     n_assets=rows.R.shape[1],
     config=PortfolioConfig(
         max_weight=1.0,       # Long-only, fully invested; cap per asset
-        fee_rate=0.001,       # Illustrative; replace with your fees
+        fee_rate=0.0003,      # 3 bp per side, all-in: exchange fee + spread + slippage
         risk_aversion=1.0,    # Must be > 0; select using historical validation
     ),
 )
@@ -42,14 +42,16 @@ config = TreeConfig(
     min_samples_leaf=20,
     max_thresholds=None,         # Every threshold; affordable with screening
     min_sharpe_improvement=0.0,  # Hurdle for accepting a split (see the discussion on noise)
+    validation_fraction=0.25,    # Last quarter of the training weeks only prunes the tree
     prediction_bound=0.10,       # Leaf scores bounded to ±10%
     search_passes=3,
     search_grid_size=7,
     verbose=True,
 )
 
-# Train on all weeks but the last 52, then compare the tree with the same tree
-# without splits and with an equal-weight portfolio, on both periods.
+# Train on all weeks but the last 52 (grow on the first three quarters of them,
+# prune on the last quarter, refit the leaves on all), then compare the tree with
+# the same tree without splits and with an equal-weight portfolio, on both periods.
 tree, train_paths, test_paths = train_and_test(portfolio, config, rows, test_periods=52)
 tree.describe()
 print("\nTrain (annualized)")

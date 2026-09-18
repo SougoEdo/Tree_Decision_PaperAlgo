@@ -29,7 +29,7 @@ replay_path (or SPOPortfolioTree.replay) trades a strategy period after period
 in row order: holdings drift with returns between rebalances, fees are paid on
 each trade, and it reports net returns, turnover, regret and the Sharpe ratio.
 replay_constant_weights does the same for a fixed target such as equal weights.
-train_and_test and performance_report compare the tree with the same tree
+train_and_test and performance_report compare the tree with  the same tree
 without splits and with an equal-weight portfolio, on training and test rows
 (annualized return, volatility, Sharpe, max drawdown, turnover and fees).
 
@@ -40,7 +40,14 @@ best few. The decision regret chooses the split: the one with the largest regret
 reduction, measured against its leaf refitted on the same holdings. It is
 accepted only if it also raises the Sharpe ratio of the replayed path, so
 splits that make the strategy flip between leaves and pay fees are rejected.
-Everything is measured on the training rows; validate on later rows with replay.
+
+Both checks above look at the rows the leaf scores were fitted on, so among
+hundreds of candidate splits they also accept lucky ones. With
+validation_fraction > 0 the last share of the rows (the checking rows) takes no
+part in growth. Afterwards every split, judged with all the splits below it, must
+lower the mean regret and raise the Sharpe ratio on the checking rows, or it is
+removed (bottom-up pruning on validation data, as in the SPOT paper). The leaf
+scores are then refit on all rows, always. Test on still later rows with replay.
 
 TODO (known limitation, to address later): noise switches inside a split.
 The Sharpe check accepts or rejects a split as a whole. A split that is right
@@ -83,6 +90,7 @@ class TreeConfig:
     min_regret_improvement: float = 1e-6  # average gain per observation at node
     shortlist_size: int = 3       # screened splits per leaf that get a full fit and replay
     min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
+    validation_fraction: float = 0.0  # last share of the rows, kept aside to prune splits; 0 = no pruning
     prediction_bound: float = 0.10  # leaf scores restricted to +/- this
     search_passes: int = 3
     search_grid_size: int = 7
@@ -389,6 +397,19 @@ class SplitRecord:
     sharpe_after: float
 
 
+@dataclass(frozen=True)
+class PruneRecord:
+    """One split judged on the checking rows, in the bottom-up order of pruning."""
+    depth: int
+    feature: int
+    threshold: float
+    regret_with: float      # mean regret on the checking rows, with the split and all below it
+    regret_without: float   # the same with the node as a single leaf
+    sharpe_with: float      # Sharpe ratio on the checking rows
+    sharpe_without: float
+    kept: bool
+
+
 # 4. Grow one tree on its own replayed training path.
 class SPOPortfolioTree:
     def __init__(self, optimizer: PortfolioOptimizer, config: TreeConfig):
@@ -396,17 +417,20 @@ class SPOPortfolioTree:
         self.config = config
         self.root = None
         self.growth_log: list[SplitRecord] = []
+        self.pruning_log: list[PruneRecord] = []
         if (config.max_depth < 0 or config.min_samples_leaf < 1
                 or (config.max_thresholds is not None and config.max_thresholds < 1)
                 or config.shortlist_size < 1
                 or config.search_passes < 1 or config.search_grid_size < 3):
             raise ValueError("Invalid tree depth, leaf size, or search settings.")
         if (not np.isfinite([config.min_regret_improvement, config.min_sharpe_improvement,
-                             config.prediction_bound, config.regret_tolerance]).all()
+                             config.prediction_bound, config.regret_tolerance,
+                             config.validation_fraction]).all()
                 or config.min_regret_improvement < 0 or config.min_sharpe_improvement < 0
-                or config.prediction_bound <= 0 or config.regret_tolerance <= 0):
+                or config.prediction_bound <= 0 or config.regret_tolerance <= 0
+                or not 0 <= config.validation_fraction < 1):
             raise ValueError("Invalid improvement thresholds, prediction bound, "
-                             "or regret tolerance.")
+                             "regret tolerance, or validation fraction.")
 
     def fit(self, X, R, Sigma, initial_weights=None):
         """Grow the tree on chronological rows while it trades its own holdings.
@@ -421,54 +445,42 @@ class SPOPortfolioTree:
         current one by more than min_sharpe_improvement; otherwise the next
         largest is tried. Finally every leaf score is refit on the final
         holdings and kept only if the Sharpe does not drop.
+
+        With validation_fraction > 0 all of the above sees only the earlier rows
+        (the fitting rows). The last rows (the checking rows) then prune the
+        tree, see _prune, and every leaf score is refit once more, on all rows.
+        That last refit is always kept.
         """
-        self.root, self.growth_log = None, []
+        self.root, self.growth_log, self.pruning_log = None, [], []
         X = finite_array(X, "X", 2)
         R = finite_array(R, "R", 2)
         n = self.optimizer.n_assets
         if len(X) != len(R) or R.shape[1] != n:
             raise ValueError("Require X=(N,P) and R=(N,n_assets).")
         Sigma = covariance_rows(Sigma, len(R), n)
+        n_check = int(round(self.config.validation_fraction * len(X)))
+        n_fit = len(X) - n_check
+        if self.config.validation_fraction > 0 and min(n_fit, n_check) < 2:
+            raise ValueError("validation_fraction must leave at least 2 fitting rows "
+                             "and 2 checking rows.")
         self.n_features = X.shape[1]
-        self._X, self._R, self._S = X.copy(), R.copy(), Sigma.copy()
         self._initial_weights = initial_weights
         try:
-            # The root is scored from equal-weight holdings; from then on,
-            # regrets are measured from the holdings of the replayed tree.
-            rows = np.arange(len(X))
-            equal = np.full((len(X), n), 1.0 / n)
-            self._U = equal
-            self._benchmarks = self.optimizer.utility(
-                self._R, self.optimizer.solve(self._R, equal, self._S), equal, self._S)
-            root = self._fit_leaf(rows)
-            leaves = [(root, rows, 0)]
-            scores = np.tile(root.prediction, (len(X), 1))
-            path = self._replay(scores)
-            self._measure_from(path)
-            if self.config.verbose:
-                print(f"root: training Sharpe {path.sharpe:.4f}")
-            while True:
-                split = self._best_split(leaves, scores, path.sharpe)
-                if split is None:
-                    break
-                (position, feature, threshold, left, right,
-                 left_rows, right_rows, gain, new_path) = split
-                node, node_rows, depth = leaves.pop(position)
-                node.feature, node.threshold = feature, float(threshold)
-                node.left, node.right = left, right
-                leaves += [(left, left_rows, depth + 1), (right, right_rows, depth + 1)]
-                scores[left_rows], scores[right_rows] = left.prediction, right.prediction
-                self.growth_log.append(SplitRecord(
-                    depth, len(node_rows), feature, float(threshold), gain,
-                    path.sharpe, new_path.sharpe))
-                if self.config.verbose:
-                    print(f"split {len(self.growth_log)}: depth={depth}, "
-                          f"N={len(node_rows)}, x[{feature}] <= {threshold:.5g}, "
-                          f"regret -{gain:.3g} per row, "
-                          f"Sharpe {path.sharpe:.4f} -> {new_path.sharpe:.4f}")
-                path = new_path
-                self._measure_from(path)
+            root, leaves, scores, path = self._grow(X[:n_fit], R[:n_fit], Sigma[:n_fit])
             self._refit_leaves(leaves, scores, path)
+            if n_check:
+                self._prune(root, X, R, Sigma, n_fit)
+                # The rules are settled: the leaf scores now learn from every row.
+                self._X, self._R, self._S = X.copy(), R.copy(), Sigma.copy()
+                leaves = self._leaves(root, self._X)
+                scores = self._scores(leaves, len(X))
+                path = self._replay(scores)
+                self._measure_from(path)
+                for leaf, rows, _ in leaves:
+                    leaf.n_samples = len(rows)
+                    leaf.regret_sum = self._score_prediction(leaf.prediction, rows)
+                # Always kept: the scores it replaces never saw the checking rows.
+                self._refit_leaves(leaves, scores, path, on_all_rows=True)
             self.root = root
         finally:
             # Deployment uses the frozen tree, not stored training outcomes.
@@ -476,6 +488,113 @@ class SPOPortfolioTree:
                 if hasattr(self, name):
                     delattr(self, name)
         return self
+
+    def _grow(self, X, R, Sigma):
+        """Best-first growth on these rows: (root, leaves, per-row scores, replayed path)."""
+        n = self.optimizer.n_assets
+        self._X, self._R, self._S = X.copy(), R.copy(), Sigma.copy()
+        # The root is scored from equal-weight holdings; from then on,
+        # regrets are measured from the holdings of the replayed tree.
+        rows = np.arange(len(X))
+        equal = np.full((len(X), n), 1.0 / n)
+        self._U = equal
+        self._benchmarks = self.optimizer.utility(
+            self._R, self.optimizer.solve(self._R, equal, self._S), equal, self._S)
+        root = self._fit_leaf(rows)
+        leaves = [(root, rows, 0)]
+        scores = np.tile(root.prediction, (len(X), 1))
+        path = self._replay(scores)
+        self._measure_from(path)
+        if self.config.verbose:
+            print(f"root: training Sharpe {path.sharpe:.4f}")
+        while True:
+            split = self._best_split(leaves, scores, path.sharpe)
+            if split is None:
+                break
+            (position, feature, threshold, left, right,
+             left_rows, right_rows, gain, new_path) = split
+            node, node_rows, depth = leaves.pop(position)
+            node.feature, node.threshold = feature, float(threshold)
+            node.left, node.right = left, right
+            leaves += [(left, left_rows, depth + 1), (right, right_rows, depth + 1)]
+            scores[left_rows], scores[right_rows] = left.prediction, right.prediction
+            self.growth_log.append(SplitRecord(
+                depth, len(node_rows), feature, float(threshold), gain,
+                path.sharpe, new_path.sharpe))
+            if self.config.verbose:
+                print(f"split {len(self.growth_log)}: depth={depth}, "
+                      f"N={len(node_rows)}, x[{feature}] <= {threshold:.5g}, "
+                      f"regret -{gain:.3g} per row, "
+                      f"Sharpe {path.sharpe:.4f} -> {new_path.sharpe:.4f}")
+            path = new_path
+            self._measure_from(path)
+        return root, leaves, scores, path
+
+    def _prune(self, root, X, R, Sigma, n_fit):
+        """Remove, from the bottom up, every split the checking rows do not confirm.
+
+        The rows from n_fit on took no part in growing the tree, so a split that
+        only fitted noise has no reason to help there. Each split is judged with
+        everything below it, against its node as a single leaf (scores fitted on
+        the fitting rows, from the current holdings). Both trees trade the
+        fitting rows and then the checking rows; the split stays only if, on the
+        checking rows, the mean regret falls by more than min_regret_improvement
+        and the Sharpe ratio rises by more than min_sharpe_improvement. This is
+        SPOT's pruning on validation data, with the Sharpe as a second judge.
+        """
+        c = self.config
+
+        def checking_path():
+            scores = self._scores(self._leaves(root, X), len(X))
+            holdings = self._replay(scores[:n_fit]).final_holdings
+            return replay_path(self.optimizer, scores[n_fit:], R[n_fit:], Sigma[n_fit:], holdings)
+
+        def visit(node, rows, depth):
+            if node.feature is None:
+                return
+            left = self._X[rows, node.feature] <= node.threshold
+            visit(node.left, rows[left], depth + 1)
+            visit(node.right, rows[~left], depth + 1)
+            with_split = checking_path()
+            self._measure_from(self._replay(self._scores(self._leaves(root, self._X), n_fit)))
+            leaf = self._fit_leaf(rows, node.prediction)
+            split = (node.feature, node.threshold, node.left, node.right,
+                     node.prediction, node.regret_sum)
+            node.feature = node.threshold = node.left = node.right = None
+            node.prediction, node.regret_sum = leaf.prediction, leaf.regret_sum
+            without = checking_path()
+            kept = bool(without.regret.mean() - with_split.regret.mean() > c.min_regret_improvement
+                        and with_split.sharpe > without.sharpe + c.min_sharpe_improvement)
+            if kept:
+                (node.feature, node.threshold, node.left, node.right,
+                 node.prediction, node.regret_sum) = split
+            self.pruning_log.append(PruneRecord(
+                depth, split[0], split[1], float(with_split.regret.mean()),
+                float(without.regret.mean()), with_split.sharpe, without.sharpe, kept))
+            if c.verbose:
+                print(f"prune check: depth={depth}, x[{split[0]}] <= {split[1]:.5g}, "
+                      f"checking regret {without.regret.mean():.5f} -> "
+                      f"{with_split.regret.mean():.5f} with the split, "
+                      f"Sharpe {without.sharpe:.4f} -> {with_split.sharpe:.4f} "
+                      f"({'kept' if kept else 'removed'})")
+
+        visit(root, np.arange(n_fit), 0)
+
+    def _leaves(self, node, X, rows=None, depth=0):
+        """(leaf, the rows of X that reach it, depth) for every leaf below node."""
+        rows = np.arange(len(X)) if rows is None else rows
+        if node.feature is None:
+            return [(node, rows, depth)]
+        left = X[rows, node.feature] <= node.threshold
+        return (self._leaves(node.left, X, rows[left], depth + 1)
+                + self._leaves(node.right, X, rows[~left], depth + 1))
+
+    def _scores(self, leaves, n_rows):
+        """Per-row scores from a list of (leaf, rows, depth)."""
+        scores = np.empty((n_rows, self.optimizer.n_assets))
+        for leaf, rows, _ in leaves:
+            scores[rows] = leaf.prediction
+        return scores
 
     def _replay(self, scores):
         """Replay per-row scores on the training rows (holdings used for regrets unchanged)."""
@@ -542,20 +661,26 @@ class SPOPortfolioTree:
         screened.sort(key=lambda split: split[0])
         return [split[1:] for split in screened[:c.shortlist_size]]
 
-    def _refit_leaves(self, leaves, scores, path):
-        """Refit every leaf score on the final holdings; keep it if Sharpe holds."""
+    def _refit_leaves(self, leaves, scores, path, on_all_rows=False):
+        """Refit every leaf score on the final holdings; keep it if Sharpe holds.
+
+        The Sharpe check compares two sets of scores fitted on the same rows. The
+        refit on all rows adds the checking rows, which the scores it replaces
+        never saw, so it is kept whatever the Sharpe of the training path does.
+        """
         refits = [self._fit_leaf(rows, node.prediction) for node, rows, _ in leaves]
         candidate = scores.copy()
         for refit, (_, rows, _) in zip(refits, leaves):
             candidate[rows] = refit.prediction
         refit_path = self._replay(candidate)
-        kept = refit_path.sharpe >= path.sharpe
+        kept = on_all_rows or refit_path.sharpe >= path.sharpe
         if kept:
             for refit, (node, _, _) in zip(refits, leaves):
                 node.prediction, node.regret_sum = refit.prediction, refit.regret_sum
         if self.config.verbose:
-            print(f"refit leaf scores: Sharpe {path.sharpe:.4f} -> "
-                  f"{refit_path.sharpe:.4f} ({'kept' if kept else 'discarded'})")
+            print(f"refit leaf scores{' on all rows' if on_all_rows else ''}: "
+                  f"Sharpe {path.sharpe:.4f} -> {refit_path.sharpe:.4f} "
+                  f"({'always kept' if on_all_rows else 'kept' if kept else 'discarded'})")
 
     def _score_prediction(self, prediction, indices):
         R, U, S = self._R[indices], self._U[indices], self._S[indices]
@@ -617,13 +742,7 @@ class SPOPortfolioTree:
         X = finite_array(X, "X", 2)
         if X.shape[1] != self.n_features:
             raise ValueError("Feature count differs from training.")
-        predictions = []
-        for row in X:
-            node = self.root
-            while node.feature is not None:
-                node = node.left if row[node.feature] <= node.threshold else node.right
-            predictions.append(node.prediction.copy())
-        return np.vstack(predictions)
+        return self._scores(self._leaves(self.root, X), len(X))
 
     def predict_weights(self, X, U, Sigma):
         """Current holdings and covariance are supplied separately from features."""
@@ -778,11 +897,11 @@ def performance_report(paths, periods_per_year=52):
 # 7. Runnable synthetic example of the whole weekly pipeline.
 def demo():
     rng = np.random.default_rng(3)
-    # Five years of daily closes for three crypto-like assets (3% daily
+    # Ten years of daily closes for three crypto-like assets (3% daily
     # volatility). A regime of about two months tilts the drifts of the first
     # two assets in opposite directions.
-    days = 5 * 365 + 1
-    start = np.datetime64("2021-01-01")
+    days = 10 * 365 + 3
+    start = np.datetime64("2016-01-01")
     dates = np.arange(start, start + np.timedelta64(days, "D"))
     regime = np.repeat(rng.choice([-1.0, 1.0], size=days // 60 + 1), 60)[:days]
     drift = np.where(regime[:, None] > 0, [0.002, -0.001, 0.0], [-0.001, 0.002, 0.0])
@@ -801,12 +920,14 @@ def demo():
     features[28:, 3] = np.lib.stride_tricks.sliding_window_view(daily_a0, 28).std(axis=1)
     features[:, 4] = rng.normal(size=days)
 
-    # One row per Monday close; the last 52 weeks are the test year.
+    # One row per Monday close; the last 52 weeks are the test year. Of the
+    # training weeks, the last quarter only prunes the tree (checking rows).
     rows = weekly_rows(dates, closes, features)
     portfolio = PortfolioOptimizer(n_assets=3, config=PortfolioConfig(
-        max_weight=1.0, fee_rate=0.001, risk_aversion=1.0,
+        max_weight=1.0, fee_rate=0.0003, risk_aversion=1.0,
     ))
-    config = TreeConfig(max_depth=2, min_samples_leaf=20, max_thresholds=None, verbose=True)
+    config = TreeConfig(max_depth=2, min_samples_leaf=20, max_thresholds=None,
+                        validation_fraction=0.25, verbose=True)
     tree, train_paths, test_paths = train_and_test(portfolio, config, rows, test_periods=52)
     tree.describe(names)
     print(f"\nTrain: {len(train_paths['SPO tree'].net_returns)} weeks, annualized")
