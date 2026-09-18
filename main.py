@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Readable SPO portfolio tree using only NumPy.
 
 Install:  python -m pip install numpy, scipy 

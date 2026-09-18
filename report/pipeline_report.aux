@@ -1,0 +1,82 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces The pipeline. \texttt  {run.py} executes it end to end once \texttt  {load_data()} is filled in.}}{1}{figure.caption.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Notation. Weights are fractions of portfolio equity; returns are decimals ($0.01=1\%$).}}{2}{table.caption.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1}What is the data?}{2}{section.1}\protected@file@percent }
+\newlabel{sec:data}{{1}{2}{What is the data?}{section.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}What you supply}{2}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}From daily data to weekly rows}{2}{subsection.1.2}\protected@file@percent }
+\newlabel{eq:rows}{{1}{2}{From daily data to weekly rows}{equation.1}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces What one weekly row knows. Nothing to the right of $d_t$ enters $x_t$ or $\Sigma _t$.}}{3}{figure.caption.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Which frequencies must be equal, and which are free}{3}{subsection.1.3}\protected@file@percent }
+\newlabel{sec:clocks}{{1.3}{3}{Which frequencies must be equal, and which are free}{subsection.1.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces The clocks of the pipeline.}}{3}{table.caption.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}What is not in the data}{4}{subsection.1.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Features: nature, frequency and choice}{4}{section.2}\protected@file@percent }
+\newlabel{sec:features}{{2}{4}{Features: nature, frequency and choice}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}What the pipeline does with a feature}{4}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Three constraints that should drive the choice}{4}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}What the tree learns: the decision problem, the regret and the Sharpe ratio}{5}{section.3}\protected@file@percent }
+\newlabel{sec:learn}{{3}{5}{What the tree learns: the decision problem, the regret and the Sharpe ratio}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}The decision problem solved for every prediction}{5}{subsection.3.1}\protected@file@percent }
+\newlabel{sec:decision}{{3.1}{5}{The decision problem solved for every prediction}{subsection.3.1}{}}
+\newlabel{eq:decision}{{2}{5}{The decision problem solved for every prediction}{equation.2}{}}
+\newlabel{eq:twoasset}{{4}{5}{The decision problem solved for every prediction}{equation.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}The loss: decision regret}{6}{subsection.3.2}\protected@file@percent }
+\newlabel{eq:utility}{{5}{6}{The loss: decision regret}{equation.5}{}}
+\newlabel{eq:regret}{{6}{6}{The loss: decision regret}{equation.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}The path and the Sharpe ratio}{6}{subsection.3.3}\protected@file@percent }
+\newlabel{eq:path}{{7}{6}{The path and the Sharpe ratio}{equation.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}What the tree is supposed to learn}{6}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}How the tree is built and trained}{6}{section.4}\protected@file@percent }
+\newlabel{sec:tree}{{4}{6}{How the tree is built and trained}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Fitting one leaf}{6}{subsection.4.1}\protected@file@percent }
+\newlabel{eq:leaf}{{8}{7}{Fitting one leaf}{equation.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Growing the tree}{7}{subsection.4.2}\protected@file@percent }
+\newlabel{eq:split}{{9}{7}{Growing the tree}{equation.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Pruning on checking weeks}{8}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:prune}{{4.3}{8}{Pruning on checking weeks}{subsection.4.3}{}}
+\newlabel{eq:prune}{{10}{9}{Pruning on checking weeks}{equation.10}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces The three blocks of ten years of weekly rows with \texttt  {validation_fraction=0.25}.}}{9}{figure.caption.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Parameters}{10}{subsection.4.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Parameters. The class defaults of depth and leaf size are looser than \texttt  {run.py}; the default of 10 thresholds per feature is tighter than \texttt  {run.py}, which tests all of them; the class default has no pruning, \texttt  {run.py} prunes.}}{10}{table.caption.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}What comes out of the tree, and how it is used}{10}{section.5}\protected@file@percent }
+\newlabel{sec:output}{{5}{10}{What comes out of the tree, and how it is used}{section.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}How to backtest a tree and the strategy}{11}{section.6}\protected@file@percent }
+\newlabel{sec:backtest}{{6}{11}{How to backtest a tree and the strategy}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}The replay is the backtest}{11}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}The protocol of \texttt  {run.py}}{12}{subsection.6.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Output of \texttt  {python main.py}: one synthetic dataset of ten years, $\lambda =1$, fee of 3 basis points, pruning on. Annualised figures; turnover per week; fees per year. The training columns cover fitting and checking weeks together. One dataset proves nothing: the three test Sharpe ratios differ by less than 0.1, and the standard error of a one-year Sharpe ratio is 1.0. Table~\ref {tab:prune} repeats the comparison on 20 datasets per setting.}}{12}{table.caption.8}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:demo}{{4}{12}{Output of \texttt {python main.py}: one synthetic dataset of ten years, $\lambda =1$, fee of 3 basis points, pruning on. Annualised figures; turnover per week; fees per year. The training columns cover fitting and checking weeks together. One dataset proves nothing: the three test Sharpe ratios differ by less than 0.1, and the standard error of a one-year Sharpe ratio is 1.0. Table~\ref {tab:prune} repeats the comparison on 20 datasets per setting}{table.caption.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Conventions and limits of this backtest}{12}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Tests done, results, and what to expect}{13}{section.7}\protected@file@percent }
+\newlabel{sec:tests}{{7}{13}{Tests done, results, and what to expect}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Is the code correct?}{13}{subsection.7.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces The 45 unit tests (\texttt  {python -m unittest discover -s tests}, about 13\,s).}}{13}{table.caption.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Experiments: design}{13}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Results}{14}{subsection.7.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Current rule, 20 datasets per row. Columns 3 to 5: mean of the paired differences of annualised test Sharpe ratios, standard error in brackets. Last column: median annualised Sharpe ratio of the tree on the training weeks and on the test year.}}{14}{table.caption.10}\protected@file@percent }
+\newlabel{tab:lambda}{{6}{14}{Current rule, 20 datasets per row. Columns 3 to 5: mean of the paired differences of annualised test Sharpe ratios, standard error in brackets. Last column: median annualised Sharpe ratio of the tree on the training weeks and on the test year}{table.caption.10}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces When do leaves help? Current rule, $\lambda =10$, single-feature generator, 20 datasets per row; ``flat'' is the tree without splits; ``half the noise'' is 1.5\% daily volatility. Columns 2 to 5 compare \emph  {medians over the 20 datasets}, flat $\to $ tree: relative change of the median (over datasets) of the mean weekly regret, and the two median annualised Sharpe ratios. The last column is the \emph  {mean of the paired differences} with its standard error; it need not have the sign of the difference of medians. In training, leaves always help, even with no signal. On the test year they make the regret worse, except in the last row, where the first split is on a momentum feature in 20 of 20 datasets. Note the $+0.11$ (0.06) obtained with no signal at all: it is the yardstick for reading the other rows.}}{15}{table.caption.11}\protected@file@percent }
+\newlabel{tab:leaves}{{7}{15}{When do leaves help? Current rule, $\lambda =10$, single-feature generator, 20 datasets per row; ``flat'' is the tree without splits; ``half the noise'' is 1.5\% daily volatility. Columns 2 to 5 compare \emph {medians over the 20 datasets}, flat $\to $ tree: relative change of the median (over datasets) of the mean weekly regret, and the two median annualised Sharpe ratios. The last column is the \emph {mean of the paired differences} with its standard error; it need not have the sign of the difference of medians. In training, leaves always help, even with no signal. On the test year they make the regret worse, except in the last row, where the first split is on a momentum feature in 20 of 20 datasets. Note the $+0.11$ (0.06) obtained with no signal at all: it is the yardstick for reading the other rows}{table.caption.11}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Regret reduction by luck and by signal, from a probe of the root that fully fits the 12 best-screened splits plus the best-screened split of every other feature. Realistic signals do not stand out from luck with five years of data. Take as threshold the 90th percentile of luck (2 of the 16 no-signal datasets exceed it by construction) and require the Sharpe ratio to rise. At $\lambda =1$ a split is then accepted in 2 of 16 single-feature datasets, 2 of 16 interaction datasets and 9 of 16 datasets with the exact regime feature; 12 of these 13 splits are on an informative feature. So about 85\% of the realistic signals are missed, and half of the exact ones.}}{15}{table.caption.12}\protected@file@percent }
+\newlabel{tab:gate}{{8}{15}{Regret reduction by luck and by signal, from a probe of the root that fully fits the 12 best-screened splits plus the best-screened split of every other feature. Realistic signals do not stand out from luck with five years of data. Take as threshold the 90th percentile of luck (2 of the 16 no-signal datasets exceed it by construction) and require the Sharpe ratio to rise. At $\lambda =1$ a split is then accepted in 2 of 16 single-feature datasets, 2 of 16 interaction datasets and 9 of 16 datasets with the exact regime feature; 12 of these 13 splits are on an informative feature. So about 85\% of the realistic signals are missed, and half of the exact ones}{table.caption.12}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Size of each term of the utility~\eqref  {eq:utility}: current rule, single-feature data, means over 5 datasets. At $\lambda =1$ the covariance penalty is a tenth of the returns; at $\lambda =50$ it is four times larger.}}{15}{table.caption.13}\protected@file@percent }
+\newlabel{tab:scale}{{9}{15}{Size of each term of the utility~\eqref {eq:utility}: current rule, single-feature data, means over 5 datasets. At $\lambda =1$ the covariance penalty is a tenth of the returns; at $\lambda =50$ it is four times larger}{table.caption.13}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces What pruning on checking weeks changes. State (iii): ten years (332 fitting, 111 checking and 52 test weeks), fee of 3 basis points, $\lambda =10$, depth 2, \texttt  {max_thresholds=100}, single-feature generator, 20 datasets per column; ``half the noise'' is 1.5\% daily volatility. ``No pruning'' is the tree grown on all 443 training weeks, as before. With no signal every feature is a noise feature. A split that passes can still disappear later with a split above it. For scale, the weekly test regret of the tree without splits is about $300\times 10^{-4}$ ($190\times 10^{-4}$ at half the noise).}}{16}{table.caption.14}\protected@file@percent }
+\newlabel{tab:prune}{{10}{16}{What pruning on checking weeks changes. State (iii): ten years (332 fitting, 111 checking and 52 test weeks), fee of 3 basis points, $\lambda =10$, depth 2, \code {max_thresholds=100}, single-feature generator, 20 datasets per column; ``half the noise'' is 1.5\% daily volatility. ``No pruning'' is the tree grown on all 443 training weeks, as before. With no signal every feature is a noise feature. A split that passes can still disappear later with a split above it. For scale, the weekly test regret of the tree without splits is about $300\times 10^{-4}$ ($190\times 10^{-4}$ at half the noise)}{table.caption.14}{}}
+\gdef \LT@i {\LT@entry 
+    {4}{26.8335pt}\LT@entry 
+    {1}{193.83904pt}\LT@entry 
+    {1}{249.24242pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}What you can expect}{17}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Known weaknesses and ideas to resolve them}{17}{section.8}\protected@file@percent }
+\newlabel{sec:weak}{{8}{17}{Known weaknesses and ideas to resolve them}{section.8}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Weaknesses found so far, with the evidence, and the ideas to resolve them. Implemented so far: pruning on checking weeks (W1) and \texttt  {max_thresholds}. Nothing else.}}{17}{table.11}\protected@file@percent }
+\newlabel{tab:weak}{{11}{17}{Weaknesses found so far, with the evidence, and the ideas to resolve them. Implemented so far: pruning on checking weeks (W1) and \code {max_thresholds}. Nothing else}{table.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Relation to the articles}{20}{appendix.A}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces Where the code follows the articles and where it departs from them.}}{20}{table.caption.15}\protected@file@percent }
+\gdef \@abspage@last{20}
