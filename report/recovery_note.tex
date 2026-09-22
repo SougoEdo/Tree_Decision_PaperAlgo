@@ -79,7 +79,7 @@ The tree sees four features at each decision: $x$; a 20-step moving average of $
 \section{What should a correct tree find? Not $d$}\label{sec:target}
 This is the point that needs care. The tree decides once and holds for 10 steps, and during these 10 steps $x$ keeps moving back towards its mean $m=1$, which lies above $d$. So what matters at a decision is not the regime \emph{now} but the expected return over the \emph{next 10 steps}, given $x$ now. With $B$ the number of those steps spent above $d$ minus the number spent below, this expected return is exactly
 \begin{equation*}
-g(x)=\mathbb{E}\big[e^{\mu B}\,\big|\,x\big]-1 ,
+g(x)=\mathbb{E}\left(e^{\mu B}\,\big|\,x\right)-1 ,
 \end{equation*}
 (the price noise averages out) and we compute it by simulation: the blue curve of Figure~\ref{fig:learned}.
 \begin{itemize}
