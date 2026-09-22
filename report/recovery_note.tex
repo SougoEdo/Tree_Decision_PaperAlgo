@@ -9,169 +9,279 @@
 \usepackage{xcolor}
 \usepackage{caption}
 \usepackage{float}
-\usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black,citecolor=blue!45!black]{hyperref}
 \graphicspath{{figures/}}
 \newcommand{\code}[1]{\texttt{\detokenize{#1}}}
 \newcommand{\keybox}[1]{\par\smallskip\noindent\fcolorbox{black!35}{black!4}{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule}{#1}}\par\smallskip}
 \newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{R}{>{\raggedleft\arraybackslash}X}
 \setlength{\parskip}{4pt}
 \setlength{\parindent}{0pt}
 \captionsetup{font=small,labelfont=bf,skip=4pt}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\1}{\mathbf{1}}
 
-\title{\vspace{-1.2cm}Can the SPO tree find planted regimes?\\[2pt]\large A controlled test with a known answer}
+\title{\vspace{-1.2cm}Can the SPO tree find a planted threshold?\\[2pt]\large A controlled test on daily data with market-sized parameters}
 \author{}
-\date{18 September 2026}
+\date{22 September 2026}
 
 \begin{document}
 \maketitle
-\vspace{-0.5cm}
+\vspace{-0.6cm}
 
-\keybox{\textbf{In short.} We build an artificial market in which one feature $x$ decides the regime of an asset: its price drifts up while $x$ is above a threshold $d$ and down while it is below. We hide $x$ among three useless features and ask the tree to trade the asset against cash. Because we planted the regimes ourselves, we know what a perfect learner should find, and we can measure how close the tree comes.
+\keybox{\textbf{In short.} We build an artificial market in which one daily feature $x$ decides the regime of an asset: the price drifts up while $x$ is above a threshold $d$ and down while it is below. The tree trades the asset against cash, sees $x$ alone, and decides every $h$ days. Because we planted the threshold, we know the answer and can measure how close the tree comes. Everything is sized on daily markets: 1\% volatility a day, a regime drift of 5 to 25\% a year, a feature that mean-reverts over weeks, 15 years of training data, 3 basis points of fees.
 
-
-\textbf{Results.}
-\begin{itemize}
-\item With one decision per step, where the right answer is $d$, the tree finds $x$ in 100 datasets of 100 and puts its threshold within 0.1 of $d$ in 95 of them. It never uses a decoy.
-\item With one decision every 10 steps the right target is no longer $d$: the position is held while the regime keeps changing, so the threshold that matters lies below $d$ (Section~\ref{sec:target}). The tree then splits first on $x$ in 86 datasets of 100, never first on a decoy, and keeps no split in 14. Its thresholds lie between about $-1.5$ and $0$, around the zone where the decision changes.
-\item On test data the tree earns almost what the ideal rule earns (Sharpe ratio per decision 0.72 against 0.74, and 0.63 for always holding the asset).
-\item The threshold is found as long as a regime lasts about one holding period or more. When the feature is much faster than the holding period there is nothing left to gain, and the tree rightly keeps no split.
-\item \emph{Caution:} the planted drift is very large (3\% per step for a volatility of 3.2\%). This test shows that the mechanism works; it does not show that weak, market-sized signals can be found.
+\textbf{Results} (Section~\ref{sec:results}, 2{,}000 fitted trees).
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item With a regime drift of $\pm25\%$ a year the tree finds the threshold at every trading rate, from daily to monthly: its split is on the planted value to within $\pm0.25$ standard deviations of $x$ in 60 to 95\% of the datasets, and it earns 75 to 85\% of what the ideal rule earns out of sample.
+\item With $\pm13\%$ a year it still finds it in 62 to 82\% of the datasets, less precisely, and captures 25 to 50\% of the gain. With $\pm5\%$ a year nothing can be found in 15 years of data, and the tree mostly keeps no split, which is the right answer: the ideal rule itself earns almost nothing there.
+\item Daily to weekly decisions are equivalent. Monthly decisions lose precision and profit, all the more when the feature is fast (half-life of a week): the regime then changes inside the holding period.
+\item A defect was found and fixed on the way: a tree that stayed in cash had an undefined Sharpe ratio, which made pruning reject every split whose alternative was cash (Section~\ref{sec:code}).
+\item \emph{Limit:} one clean feature. The earlier experiment (Section~\ref{sec:first}) showed decoys are ignored at a huge drift; whether they stay ignored at these drifts is the next test.
 \end{itemize}}
 
-\section{The method, in the vocabulary of the articles}
-\begin{itemize}
-\item \textbf{Predict, then optimize.} A predictor gives a return vector $\hat c$; a portfolio optimizer turns it into weights. Here the optimizer is the mean--variance problem with proportional transaction costs of Wang and Hasuike (their ``DIR'' article, equation 8): maximise $\hat c^\top w-f^\top|w-u|-\lambda\,w^\top\Sigma w$ over long-only, fully invested weights $w$, where $u$ are the current holdings. There are two assets: the risky asset and cash (constant price, no fee). The fee is 3 basis points and $\lambda=1$.
-\item \textbf{SPO loss.} The predictor is not trained to forecast returns well. It is trained on the \emph{decision regret}: the utility lost by trading on $\hat c$ instead of on the returns that really happened (the SPO loss of Elmachtoub and Grigas, with costs and risk inside, as in DIR equation 10).
-\item \textbf{SPO tree.} The predictor is a decision tree, as in ``SPOT'' (Elmachtoub, Liang and McNellis): each leaf holds one vector $\hat c$, and splits are chosen to reduce the SPO loss. Two things are specific to this implementation. The tree is trained on the path of its own past holdings, because costs depend on them. And, as SPOT does, it is pruned on validation data: the tree is grown on the first three quarters of the training decisions, and a split stays only if it lowers the regret \emph{and} raises the Sharpe ratio on the last quarter.
-\item \textbf{Two clocks.} Data arrive at every step; the portfolio is decided every 10 steps and held in between, the way one would trade weekly on daily data. A training row is one decision: the features at that step, and the return of the asset over the next 10 steps.
-\end{itemize}
+\section{The model under test}\label{sec:model}
+\textbf{Decision.} Two assets, the risky asset and cash. At a decision the portfolio $w=(w_1,w_2)$, $w\ge0$, $w_1+w_2=1$, is chosen from the current holdings $u$ by the mean--variance problem with proportional costs (Wang \& Hasuike, ``DIR'', eq.~8):
+\begin{equation}\label{eq:opt}
+w^\star(\hat c;u,\Sigma)=\argmax_{w\in\Delta}\;\hat c^\top w-f^\top|w-u|-\lambda\,w^\top\Sigma w,
+\qquad f=(3\text{ bp},\,0),\quad \lambda=1,
+\end{equation}
+where $\hat c$ is a vector of scores (one per asset) supplied by the predictor and $\Sigma$ the covariance of the returns until the next decision. The problem is solved exactly (enumeration of the KKT cases).
 
-\section{The planted world}
-The data come from \texttt{synthetic\_data.py}. The feature is a mean-reverting (Ornstein--Uhlenbeck) process, and the asset is a geometric random walk whose drift depends on it:
-\begin{equation*}
-x_{s+1}=m+e^{-k}(x_s-m)+\text{noise},\qquad
-\log\frac{S_{s+1}}{S_s}=\begin{cases}+\mu-\tfrac12\sigma^2+\sigma\varepsilon_s & \text{if } x_s\ge d,\\[2pt] -\mu-\tfrac12\sigma^2+\sigma\varepsilon_s & \text{if } x_s<d.\end{cases}
-\end{equation*}
+\textbf{SPO loss.} With the realised returns $r$, the utility of a portfolio is $U(w;r,u,\Sigma)=r^\top w-f^\top|w-u|-\lambda w^\top\Sigma w$ and the \emph{decision regret} of the scores $\hat c$ is
+\begin{equation}\label{eq:regret}
+\ell(\hat c)=U\!\big(w^\star(r;u,\Sigma)\big)-U\!\big(w^\star(\hat c;u,\Sigma)\big)\;\ge 0,
+\end{equation}
+the utility lost by deciding on $\hat c$ instead of on the returns that happened (the SPO loss of Elmachtoub \& Grigas with costs and risk inside). The predictor is trained on this regret, not on a forecast error.
+
+\textbf{SPO tree.} The predictor is a decision tree on $x$ of depth at most 2, each leaf holding one score vector $\hat c_\ell=(\hat c_\ell,0)$ (cash has score 0). It is fitted as in SPOT (Elmachtoub, Liang \& McNellis), with two additions of this implementation.
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \emph{Growth}, on the first 75\% of the training decisions. At each round and for every leaf, every threshold on $x$ is screened, the three best are refitted (leaf scores by a bounded coordinate search on the empirical regret, $|\hat c_\ell|\le10\%$, at least 20 decisions per leaf), and the split with the largest total regret reduction is accepted if the replayed training Sharpe ratio rises. The holdings $u_t$ in \eqref{eq:regret} are those of the tree's own replayed path: fees depend on what was held before.
+\item \emph{Pruning}, on the last 25\% (the ``checking'' decisions, unseen during growth): a split stays only if, there, it lowers the mean regret and raises the Sharpe ratio. Leaf scores are then refitted on all training decisions.
+\end{itemize}
+The optimizer, the tree and its settings are those of \code{run.py} (the real-data pipeline).
+
+\textbf{Two clocks.} Data are daily; decisions are taken every $h$ days and held in between. A training row is one decision: $x_t$ on the decision day, the label $r_t=S_{t+h}/S_t-1$ for the asset (0 for cash) and $\Sigma_t=\mathrm{diag}(h\,\hat\sigma_t^2,\,10^{-6})$ with $\hat\sigma_t^2$ the variance of the last 180 daily returns. $h$ is the trading rate.
+
+\section{The planted world}\label{sec:world}
+The feature is a daily Ornstein--Uhlenbeck process and the asset a geometric random walk whose drift follows the feature (\code{synthetic_data.py}):
+\begin{align}
+x_{t+1}&=m+e^{-k}(x_t-m)+\eta_t, & \eta_t&\sim\mathcal N\!\big(0,\;s^2(1-e^{-2k})\big),\label{eq:ou}\\
+\log\frac{S_{t+1}}{S_t}&=\mu_t-\tfrac12\sigma^2+\sigma\varepsilon_t, & \mu_t&=\begin{cases}+\mu & x_t\ge d\\ -\mu & x_t<d\end{cases},\qquad \mu=e\,\sigma.\label{eq:price}
+\end{align}
+$x$ has long-run mean $m$, stationary variance $s^2$ and half-life $\ln2/k$ days. The \emph{edge} $e=\mu/\sigma$ is the daily drift-to-volatility ratio, so $e\sqrt{252}$ is the annual Sharpe ratio of a trader who knows the regime every day. The threshold is planted \textbf{at the mean of the feature}, $d=m$.
+
+\textbf{What a correct tree should find.} A decision is held for $h$ days while $x$ keeps moving, so what matters at a decision is the expected return over the holding period given $x$ now. With $B_h=\sum_{j=0}^{h-1}\operatorname{sign}(x_j-d)$ the number of days spent above $d$ minus the number below,
+\begin{equation}\label{eq:g}
+g_h(x)=\E\!\left[e^{\mu B_h}\,\middle|\,x_0=x\right]-1
+\end{equation}
+(the price noise averages out), computed by Monte Carlo on \eqref{eq:ou}. Because $d=m$, the law of $x-m$ is symmetric and $g_h(m+z)=-g_h(m-z)$ up to the convexity of the exponential (negligible here): \textbf{$g_h$ changes sign at $d$ for every holding period}. By \eqref{eq:opt} the ideal position is the full asset where $g_h(x)>2\lambda h\sigma^2$ (0.02\% for $h=1$, 0.42\% for $h=21$) and cash below, so the decision changes at $d$ up to a few hundredths. The right threshold is therefore $d$ at every trading rate. (When $d\neq m$ this is no longer true: see Section~\ref{sec:first}.)
+
 \begin{table}[H]
 \centering\small
-\begin{tabularx}{\linewidth}{@{}l l L@{}}
+\begin{tabularx}{\linewidth}{@{}l l l L@{}}
 \toprule
-Parameter & Base value & Meaning\\
+Parameter & Base & Also tested & Meaning and realism\\
 \midrule
-$\mu$ & 3\% per step & drift of the asset: $+\mu$ above the threshold, $-\mu$ below\\
-$\sigma$ & 3.2\% per step & volatility of the asset (variance 0.001)\\
-$d$ & 0 & the planted threshold on $x$\\
-$m$, variance of $x$ & 1, 4 & long-run mean and variance of $x$: the threshold sits half a standard deviation below the mean, so $x$ is above $d$ in 69\% of the steps\\
-$k$ & 0.2 per step & reversion speed: a regime lasts about 5 steps on average\\
-decision interval & 10 steps & a position is held for 10 steps\\
+$\sigma$ & 1\% a day & -- & volatility of the asset, 16\% a year (an equity index)\\
+$e=\mu/\sigma$ & 0.10 & 0.02, 0.05 & drift $\pm25\%$ a year ($\pm5\%$, $\pm13\%$); Sharpe of a perfect daily timer $e\sqrt{252}$ = 1.6 (0.3, 0.8)\\
+$k$ & 0.02 a day & 0.01, 0.05, 0.10 & reversion speed: half-life 35 days (69, 14, 7 days)\\
+$m$, $s^2$, $d$ & 0, 1, 0 & -- & $x$ is a standardized feature; the threshold sits at its mean\\
+$h$ & 5 days & 1, 2, 10, 21 & trading rate: weekly (daily, twice a week, every two weeks, monthly)\\
+training, test & 15 years, 5 years & -- & 3{,}780 and 1{,}260 daily observations; 180 warm-up days for $\Sigma$\\
+fee, $\lambda$ & 3 bp, 1 & -- & per traded notional on the asset, 0 on cash\\
+tree & depth $\le2$, $\ge20$ per leaf & -- & all thresholds screened, shortlist 3, last 25\% of the training decisions prune\\
+datasets per cell & 100 & 50 & 100 at $e\in\{0.05,0.10\}$, 50 at $e=0.02$ and in the $k$ sweep\\
 \bottomrule
 \end{tabularx}
-\caption{Base parameters (the defaults of \code{Case} in \texttt{recovery\_test.py}).}
+\caption{Parameters (the defaults of \code{Case} in \code{recovery_test.py} and the sweeps of \code{recovery_figures.py}). One decision every $h$ days over 15 years gives 3{,}780, 1{,}890, 756, 378 and 180 training decisions for $h=1,2,5,10,21$ (the last quarter for pruning), and 1{,}260, 630, 252, 126, 60 test decisions.}
+\label{tab:params}
 \end{table}
-The tree sees four features at each decision: $x$; a 20-step moving average of $x$ (informative, but a blurred and late copy); an unrelated mean-reverting process with the same law as $x$; and white noise. A dataset has 443 training decisions (332 to grow the tree, 111 to prune it) followed by test decisions that are never used in training.
 
 \begin{figure}[H]
 \centering\includegraphics[width=0.95\linewidth]{recovery_world}
-\caption{A stretch of one dataset. The background colour is the true regime, which the tree never sees. A decision is taken at each grey tick and held until the next one, while the regime keeps changing.}
+\caption{Two years of one dataset (base parameters, weekly decisions). The background is the true regime, which the tree never sees; a decision is taken at each grey tick and held until the next one.}
 \label{fig:world}
 \end{figure}
 
-\section{What should a correct tree find? Not $d$}\label{sec:target}
-This is the point that needs care. The tree decides once and holds for 10 steps, and during these 10 steps $x$ keeps moving back towards its mean $m=1$, which lies above $d$. So what matters at a decision is not the regime \emph{now} but the expected return over the \emph{next 10 steps}, given $x$ now. With $B$ the number of those steps spent above $d$ minus the number spent below, this expected return is exactly
-\begin{equation*}
-g(x)=\mathbb{E}\left(e^{\mu B}\,\big|\,x\right)-1 ,
-\end{equation*}
-(the price noise averages out) and we compute it by simulation: the blue curve of Figure~\ref{fig:learned}.
-\begin{itemize}
-\item $g$ changes sign near $x\approx-0.9$, well \emph{below} $d=0$: just under $d$ the first step is bad, but $x$ soon climbs back above $d$ and the next steps are good.
-\item The ideal position (lower panel) is zero below that point and rises to a full position where $g$ reaches $2\lambda\sigma_{10}^2\approx 3.6\%$ ($\sigma_{10}\approx13\%$ is the volatility of the asset over 10 steps), near $x\approx -0.3$. Above that, the portfolio is fully invested.
-\item At $d$ itself $g$ jumps from about 5\% to about 12\%, but the decision is the same on both sides: fully invested. \textbf{A tree trained on decisions has no reason to split at $d$.} This is the SPO idea at work: the loss rewards finding where the \emph{decision} changes, not where the conditional mean changes.
-\end{itemize}
-So the right question is not ``does the tree find $d$?'' but ``does the tree put its threshold where the decision changes, between about $-0.9$ and $-0.3$?''. The tree finds $d$ itself in two cases: when a decision is taken at every step, or when $d$ equals the mean of $x$ (by symmetry). We test the first case below.
+\section{Protocol}\label{sec:protocol}
+For each cell (a trading rate $h$ with an edge $e$, or with a speed $k$ at $e=0.10$) and each of its $N$ independent datasets: simulate 180 + 3{,}780 + 1{,}260 days; fit the tree on the 15 training years; replay it on the 5 test years, starting from its holdings at the end of training. Four benchmarks are replayed on the same rows with the same optimizer: the \emph{ideal rule} (optimizer fed with $\hat c=(g_h(x),0)$, the best possible use of $x$); the \emph{rule at $d$} (scores $\pm10\%$ according to $x\ge d$); \emph{always the asset}; the \emph{tree without splits} (one leaf, i.e.\ no information). Four measurements:
+\begin{enumerate}\setlength{\itemsep}{1pt}
+\item \textbf{Does it split, and where?} Share of datasets whose first split is on $x$ (with one feature, the alternative is no split); the distribution of the first threshold, whose target is $d=0$ in units of the standard deviation of $x$.
+\item \textbf{Test Sharpe ratio}, annualized as $\sqrt{252/h}\times$ the per-decision Sharpe of net returns, averaged over the datasets.
+\item \textbf{Share of the possible gain captured}: $(R_{\text{tree}}-R_{\text{flat}})/(R_{\text{ideal}}-R_{\text{flat}})$ with $R$ the mean test return, pooled over the datasets of a cell (blank when the ideal rule gains under 0.5\% a year: nothing to capture).
+\item \textbf{No split kept}: share of datasets where pruning left a single leaf.
+\end{enumerate}
 
+\section{Results}\label{sec:results}
+\subsection{One dataset}
 \begin{figure}[H]
 \centering\includegraphics[width=0.95\linewidth]{recovery_learned}
-\caption{One dataset. \emph{Top:} every dot is one training decision; the blue curve is the true expected 10-step return given $x$; the orange steps are the two leaves of the fitted tree. \emph{Bottom:} the position that the optimizer takes with the true curve (blue) and with the tree's leaves (orange). Vertical lines: planted $d$ (dashed), sign change of the true curve (dotted), the tree's threshold (orange). The upper leaf sits at $+10\%$, the largest value the search allows: leaf values are inputs to the optimizer, not forecasts, and any value above 3.6\% gives the same fully invested portfolio.}
+\caption{Base parameters, weekly decisions, dataset 42. \emph{Top:} realised 5-day returns by bin of $x$ (training decisions), the true $g_5(x)$ of \eqref{eq:g}, and the tree's leaf scores. \emph{Bottom:} the position the optimizer takes with the true curve and with the tree. Growth made three splits. Pruning removed the one at $x\le-2.01$ and kept the root split at $x\le0.12$ (on the checking decisions: regret $0.0097\to0.0066$ per decision, Sharpe $0.06\to0.20$) together with a second-level one at $x\le1.60$ (31 decisions, regret $0.0067\to0.0066$), an example of the tail leaves discussed in Section~\ref{sec:says}.}
 \label{fig:learned}
 \end{figure}
-
-\section{Results}
-\subsection{One dataset}
-For the dataset of Figures~\ref{fig:world} and~\ref{fig:learned}, growth made a single split, on $x$ at $-0.22$. Pruning kept it: on the 111 checking decisions it lowers the regret from 0.040 to 0.027 and raises the Sharpe ratio per decision from 0.62 to 0.74. No decoy is used. The lower leaf says ``cash'' (predicted return $-2.9\%$), the upper leaf ``fully invested''. The threshold sits at the top of the zone where the ideal position rises from 0 to 1.
-\begin{table}[H]
-\centering\small
-\begin{tabular}{@{}l rrr@{}}
-\toprule
-1,000 test decisions & mean return & Sharpe ratio & turnover\\
-\midrule
-Tree & 13.9\% & 0.73 & 0.76\\
-Ideal rule (optimizer fed with the true $g$) & 14.0\% & 0.72 & 0.66\\
-Rule at $d$ (the asset while $x\ge d$, else cash) & 13.6\% & 0.72 & 0.82\\
-Always the asset (also the tree without splits) & 12.6\% & 0.57 & 0.00\\
-\bottomrule
-\end{tabular}
-\caption{One dataset; all figures are per decision (10 steps). The returns are huge because the planted drift is huge; only the comparison between the lines matters.}
-\end{table}
-
 \begin{figure}[H]
 \centering\includegraphics[width=0.95\linewidth]{recovery_decisions}
-\caption{The first 60 test decisions of the same dataset. The tree (orange) goes to cash when $x$ is below its threshold and is fully invested otherwise; the ideal rule (dashed blue) differs only by taking partial positions in the narrow band where the expected return is small.}
+\caption{The same dataset out of sample. \emph{Top, middle:} the first 60 test decisions; the tree is in cash below its threshold and fully invested above, like the ideal rule. \emph{Bottom:} wealth over the 5 test years. This test window is dominated by the down regime (the asset loses 22\% a year), so every rule earns little; what the figure shows is the decisions, not the level of the returns.}
 \label{fig:decisions}
 \end{figure}
 
-\subsection{Where the threshold lands, over 100 datasets}
-\textbf{One decision per step} (left panel of Figure~\ref{fig:hist}). Here theory says the right threshold is exactly $d$. The first split is on $x$ in 100 datasets of 100, every tree has exactly one split, and no decoy appears. The median threshold is $0.000$; half of the thresholds lie within $[-0.015,+0.010]$ and 95 of 100 within 0.1 of $d$ (the standard deviation of $x$ is 2). On test data the tree has a Sharpe ratio per decision of 0.684, the ideal rule 0.682, always holding the asset 0.270.
-
-\textbf{One decision every 10 steps} (right panel). The first split is on $x$ in 86 datasets, never on a decoy; 14 trees keep no split. The median threshold is $-0.46$; half of them lie between $-0.85$ and $-0.19$, and 90\% between $-1.53$ and $+0.01$. Growth made 1.6 splits per tree and pruning left 1.04: 15 trees keep a second split on $x$ (a finer position sizing), and 3 keep a second-level split on a pure-noise decoy. On test data: tree 0.724, ideal rule 0.742, rule at $d$ 0.749, always the asset 0.628; the tree is $0.018$ (standard error 0.004) below the ideal rule and $0.096$ (0.005) above always holding the asset.
-
-\textbf{Why the spread is wide, and why it costs little.} Only 48 of the 332 decisions used to grow the tree have $x$ between $-0.9$ and $0$, and there the expected return is small (0 to 5\%) against a noise of 13\% per decision. The data cannot say where exactly inside this zone the threshold should be. For the same reason, the exact place matters little for performance.
-
+\subsection{Where the threshold lands, over 100 datasets per cell}
 \begin{figure}[H]
-\centering\includegraphics[width=\linewidth]{recovery_histograms}
-\caption{All thresholds on $x$ kept in the final trees, over 100 independent datasets per panel. \emph{Left:} one decision per step; the right target is $d$. \emph{Right:} one decision every 10 steps; the right target is the zone between the sign change (dotted) and about $-0.3$.}
+\centering\includegraphics[width=0.92\linewidth]{recovery_histograms}
+\caption{All thresholds on $x$ kept in the final trees, one panel per trading rate, $k=0.02$; \emph{top:} edge 0.05, \emph{bottom:} edge 0.10. The target is $d=0$ at every rate; $x$ has standard deviation 1. Bars at $\pm1.5$ collect thresholds beyond the axis (tail leaves).}
 \label{fig:hist}
 \end{figure}
-
-\subsection{Effect of the speed of the feature and of the volatility of the price}
-We vary the reversion speed $k$ of the feature and the volatility of the price, all else as in the base case, with 20 datasets per cell (Figures~\ref{fig:maps} and~\ref{fig:byk}).
-\begin{itemize}
-\item \textbf{The true feature is found} (left map) in 95 to 100\% of the datasets when a regime lasts at least about one holding period ($k\le0.1$) and the volatility is up to 20\% per step, and still in 60 to 85\% at 30\% per step, where the drift is a tenth of the volatility. With $k=0.2$ (a regime lasts half a holding period) it is found in 75 to 90\% up to a volatility of 10\%. With $k=0.5$ (a regime lasts 2 steps) in 20 to 45\%.
-\item \textbf{When $x$ is not found, the usual outcome is no split at all} (middle map), not a wrong feature: over the 600 trees, a pure-noise decoy is the first split in 9 (1.5\%) and the moving average in 30 (5\%), almost all at volatilities of 20 to 30\%. At $k=0.5$ and low volatility 70 to 80\% of the trees keep no split, and this is the right answer: the regime at the decision says almost nothing about the next 10 steps, and the ideal rule gains only 0.01\% per decision over always holding the asset.
-\item \textbf{Share of the possible gain that is captured on test data} (right map): 96 to 100\% for $k\le0.1$ at a volatility up to 3.2\%, about 80\% at 10\%, and 12 to 40\% at 20 to 30\%.
-\item \textbf{The speed moves the target} (Figure~\ref{fig:byk}). The faster the feature, the further below $d$ the expected 10-step return changes sign: $-0.04$, $-0.05$, $-0.16$, $-0.37$, $-0.92$ and $-3.6$ for the six speeds. The tree's thresholds follow, staying between that point and $d$: medians $-0.02$, $+0.02$, $-0.04$, $-0.19$, $-0.47$ and $-1.52$.
-\item \textbf{The volatility changes the nature of the decision.} With $\lambda$ fixed, a more volatile asset is no longer held fully: the ideal position becomes a gradual function of $x$ over its whole range. A tree with two to four leaves replaces this slope by a few steps, so it captures a smaller share, and its best single threshold moves up towards the middle of the distribution of $x$ (medians $+0.16$ to $+0.37$ for the slow features at volatilities of 10 to 30\%). This is also why $x$ is found slightly \emph{more} often at 10\% than at 1\% when $k=0.2$: the position depends on $x$ over a wider range.
-\end{itemize}
-
 \begin{figure}[H]
-\centering\includegraphics[width=\linewidth]{recovery_maps}
-\caption{Twenty datasets per cell. Rows: reversion speed $k$ of the feature (top: slow, a regime lasts many decisions; bottom: fast, the regime at the decision says little about the next 10 steps). Columns: volatility of the price per step, with the ratio drift/volatility in brackets.}
+\centering\includegraphics[width=\linewidth]{recovery_thresholds_by_rate}
+\caption{First threshold found, by trading rate and edge (boxes: quartiles; the count above each box is the number of datasets that split).}
+\label{fig:byrate}
+\end{figure}
+
+\subsection{Trading rate against edge, and against the speed of the feature}
+\begin{figure}[H]
+\centering\includegraphics[width=0.95\linewidth]{recovery_maps}
+\caption{Rows: trading rate; columns: edge ($k=0.02$). From left to right: datasets whose first split is on $x$; datasets that keep no split; share of the ideal rule's test gain captured; annualized test Sharpe ratio of the tree (ideal rule in brackets).}
 \label{fig:maps}
 \end{figure}
-
 \begin{figure}[H]
-\centering\includegraphics[width=0.8\linewidth]{recovery_thresholds_by_k}
-\caption{First threshold found on $x$, for each speed $k$, at the base volatility. Diamonds: where the true expected 10-step return changes sign.}
-\label{fig:byk}
+\centering\includegraphics[width=0.95\linewidth]{recovery_maps_by_k}
+\caption{Same maps with the reversion speed of $x$ in columns, at edge 0.10.}
+\label{fig:mapsk}
 \end{figure}
 
-\section{What this test says, and what it does not}
-\textbf{What it says.}
-\begin{enumerate}
-\item \textbf{The mechanism works.} When the right answer is $d$, the tree recovers it to within a few hundredths of a standard deviation of $x$, with a single split, and ignores the three decoys.
-\item \textbf{The tree learns where the decision changes, not where the regime changes.} With positions held for 10 steps it puts its threshold below $d$, where holding the asset starts to pay over the holding period, and it is blind to the jump of the expected return at $d$, because both sides of $d$ lead to the same portfolio. To read the tree correctly: a threshold means ``from here on, hold the asset'', not ``here the drift changes''. This is the SPO principle of the articles, seen on a case where the two differ.
-\item \textbf{Decoys are not a problem at this signal strength}, and pruning removes about a third of the splits that growth made.
-\item \textbf{Two limits.} A feature much faster than the holding period leaves nothing to find, and the tree then rightly keeps no split. A high volatility with a fixed $\lambda$ turns the problem into position sizing, which a small tree only approximates by steps.
-\end{enumerate}
-\textbf{What it does not say.}
-\begin{itemize}
-\item The planted drift is enormous by market standards: 3\% per step for a volatility of 3.2\%, a ratio close to 1. The experiments of the main report used a ratio near 0.07 (0.2\% a day for 3\% a day), and there the splits were not reliably better than no split. In this note the ratio reaches 0.1 only through extreme volatilities. The natural next step is the same figures with small drifts, ratios of 0.02 to 0.1 at a volatility of 3\%, which is what connects this test to real markets.
-\item There is one asset and cash, one informative feature, and regimes that depend on a single threshold.
+\begin{table}[H]
+\centering\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}l r rr r r rrr r@{}}
+\toprule
+& & \multicolumn{2}{c}{splits (\%)} & \multicolumn{2}{c}{first threshold on $x$} & \multicolumn{3}{c}{annualized test Sharpe} & gain\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-9}
+edge & $h$ & on $x$ & none & median [quartiles] & $|\cdot|\le0.25$ & tree & ideal & at $d$ & captured\\
+\midrule
+0.10 & 1 & 97 & 3 & $+0.00\ [-0.03,+0.05]$ & 95\% & 0.80 & 1.03 & 1.04 & 76\%\\
+ & 2 & 99 & 1 & $+0.03\ [-0.03,+0.11]$ & 92\% & 0.86 & 0.97 & 0.98 & 85\%\\
+ & 5 & 94 & 6 & $+0.07\ [-0.04,+0.15]$ & 81\% & 0.73 & 0.88 & 0.88 & 79\%\\
+ & 10 & 89 & 11 & $+0.07\ [-0.10,+0.21]$ & 70\% & 0.63 & 0.78 & 0.78 & 78\%\\
+ & 21 & 81 & 19 & $+0.06\ [-0.07,+0.25]$ & 60\% & 0.54 & 0.68 & 0.66 & 75\%\\
+\midrule
+0.05 & 1 & 82 & 18 & $+0.05\ [-0.10,+0.22]$ & 60\% & 0.12 & 0.49 & 0.49 & 25\%\\
+ & 2 & 75 & 25 & $+0.04\ [-0.12,+0.22]$ & 64\% & 0.21 & 0.46 & 0.46 & 44\%\\
+ & 5 & 78 & 22 & $+0.10\ [-0.07,+0.33]$ & 53\% & 0.24 & 0.43 & 0.42 & 51\%\\
+ & 10 & 73 & 27 & $+0.05\ [-0.20,+0.36]$ & 47\% & 0.17 & 0.39 & 0.38 & 43\%\\
+ & 21 & 62 & 38 & $+0.25\ [-0.06,+0.60]$ & 34\% & 0.17 & 0.35 & 0.34 & 43\%\\
+\midrule
+0.02 & 1 & 58 & 42 & $+0.12\ [-0.82,+0.83]$ & 24\% & $-0.03$ & $-0.09$ & 0.14 & --\\
+ & 2 & 54 & 46 & $-0.01\ [-0.71,+0.80]$ & 15\% & $-0.02$ & 0.15 & 0.13 & 10\%\\
+ & 5 & 54 & 46 & $+0.34\ [-0.19,+0.87]$ & 26\% & $-0.03$ & 0.15 & 0.13 & $-3$\%\\
+ & 10 & 58 & 42 & $-0.05\ [-0.41,+0.69]$ & 24\% & 0.02 & 0.14 & 0.13 & $-8$\%\\
+ & 21 & 56 & 44 & $+0.25\ [-0.02,+0.60]$ & 32\% & $-0.03$ & 0.14 & 0.14 & $-43$\%\\
+\bottomrule
+\end{tabular}
+\caption{Trading rate $h$ (days between decisions) against edge, $k=0.02$; 100 datasets per row at edges 0.10 and 0.05, 50 at 0.02. ``Always the asset'' has an annualized Sharpe between $-0.04$ and $0.00$ everywhere (no unconditional drift). Standard error of the tree--ideal Sharpe difference: 0.03 to 0.05.}
+\label{tab:edge}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}l r rr r r rr r@{}}
+\toprule
+& & \multicolumn{2}{c}{splits (\%)} & \multicolumn{2}{c}{first threshold on $x$} & \multicolumn{2}{c}{annualized Sharpe} & gain\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+half-life of $x$ & $h$ & on $x$ & none & median [quartiles] & $|\cdot|\le0.25$ & tree & ideal & captured\\
+\midrule
+69 days ($k=0.01$) & 1 & 88 & 12 & $+0.00\ [-0.03,+0.08]$ & 86\% & 0.63 & 1.09 & 56\%\\
+ & 2 & 92 & 8 & $+0.05\ [-0.00,+0.08]$ & 89\% & 0.80 & 1.06 & 71\%\\
+ & 5 & 94 & 6 & $+0.05\ [-0.04,+0.12]$ & 87\% & 0.84 & 0.97 & 80\%\\
+ & 10 & 90 & 10 & $+0.06\ [-0.11,+0.14]$ & 87\% & 0.75 & 0.93 & 75\%\\
+ & 21 & 82 & 18 & $+0.15\ [-0.06,+0.23]$ & 71\% & 0.68 & 0.84 & 76\%\\
+\midrule
+14 days ($k=0.05$) & 1 & 98 & 2 & $+0.00\ [-0.01,+0.06]$ & 94\% & 0.69 & 0.98 & 68\%\\
+ & 2 & 98 & 2 & $+0.05\ [-0.01,+0.15]$ & 88\% & 0.76 & 0.90 & 81\%\\
+ & 5 & 94 & 6 & $+0.18\ [-0.02,+0.25]$ & 74\% & 0.65 & 0.75 & 78\%\\
+ & 10 & 86 & 14 & $+0.21\ [-0.05,+0.43]$ & 44\% & 0.48 & 0.64 & 67\%\\
+ & 21 & 80 & 20 & $+0.12\ [-0.16,+0.34]$ & 40\% & 0.30 & 0.49 & 52\%\\
+\midrule
+7 days ($k=0.10$) & 1 & 96 & 4 & $+0.02\ [-0.02,+0.07]$ & 92\% & 0.77 & 0.96 & 78\%\\
+ & 2 & 94 & 6 & $+0.03\ [-0.02,+0.16]$ & 74\% & 0.64 & 0.84 & 69\%\\
+ & 5 & 96 & 4 & $+0.17\ [+0.04,+0.45]$ & 52\% & 0.45 & 0.60 & 69\%\\
+ & 10 & 80 & 20 & $+0.20\ [-0.14,+0.54]$ & 38\% & 0.38 & 0.48 & 67\%\\
+ & 21 & 72 & 28 & $+0.10\ [-0.03,+0.58]$ & 47\% & 0.18 & 0.34 & 44\%\\
+\bottomrule
+\end{tabular}
+\caption{Trading rate against the speed of $x$, at edge 0.10, 50 datasets per row (the 35-day row is the edge-0.10 block of Table~\ref{tab:edge}).}
+\label{tab:k}
+\end{table}
+
+\textbf{Reading the figures and tables.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item At edge 0.10 the tree splits on $x$ in 81 to 99\% of the datasets and puts its threshold at the mean: median $0.00$ to $0.07$, quartiles within $\pm0.05$ daily and $[-0.07,+0.25]$ monthly. Out of sample it is 0.11 to 0.23 of annual Sharpe below the ideal rule (standard error 0.03--0.04) and captures 75 to 85\% of the gain. The rule at $d$ equals the ideal rule: with these sizes the ideal position is all or nothing.
+\item At edge 0.05 the threshold is found in 62 to 82\% of the datasets but with quartiles of about $\pm0.2$, and 25 to 51\% of the gain is captured. At edge 0.02 the thresholds spread over the whole range and no gain is captured; the ideal rule itself reaches a Sharpe of 0.15 at most. Fifteen years of data do not contain that signal.
+\item The trading rate matters little from daily to weekly. Every two weeks and monthly lose ground (81\% found and 60\% within $\pm0.25$ at $h=21$ against 97\% and 95\% daily), for two reasons visible in Table~\ref{tab:k}: fewer decisions to learn from (180 monthly ones) and, when $x$ is fast, a regime that flips inside the holding period ($g_{21}(1)=0.87\%$ at $k=0.10$ against $1.79\%$ at $k=0.02$).
+\item The slow rates show a small upward bias of the median threshold ($+0.06$ to $+0.25$): with a holding period and fees, entering just above the mean is not worth the trade, so the tree waits for $x$ to be clearly positive.
+\item The no-split share rises from 3\% (daily) to 19\% (monthly) at edge 0.10 and reaches 42--46\% at edge 0.02: when the checking decisions do not confirm a split, the tree stays flat, which is the safe side.
+\end{itemize}
+
+\section{The first experiment (18 September): a large drift with decoys}\label{sec:first}
+The first run used the same tree, optimizer and price model, but with a step as the time unit and sizes far from markets: $\mu=3\%$ per step for $\sigma=3.2\%$ per step, an edge of about 0.95 instead of 0.02--0.10. It also placed the threshold \emph{below} the mean of $x$ and hid $x$ among decoys. It is kept here because it answers two questions the new run does not: are decoys ignored, and what does the tree find when $d\neq m$?
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}l L L@{}}
+\toprule
+Parameter & Value & Note\\
+\midrule
+$\mu$, $\sigma$ & 3\%, 3.2\% per step & edge 0.95; volatilities 1 to 30\% per step also swept\\
+$d$; $m$, $s^2$ & 0; 1, 4 & $d$ half a standard deviation below the mean: $x\ge d$ 69\% of the time\\
+$k$ & 0.2 per step & a regime lasts about 5 steps; 0.01 to 0.5 also swept\\
+$h$ & 10 steps (and 1) & a position held while the regime changes twice on average\\
+features & $x$, 20-step average of $x$, an unrelated OU with the same law, white noise & three decoys\\
+data & 443 training decisions (332 grow, 111 prune), 300 test & 100 datasets per histogram, 20 per cell of the $k\times\sigma$ map, 800 fits\\
+\bottomrule
+\end{tabularx}
+\caption{The first experiment.}
+\end{table}
+\textbf{What should the tree find when $d\neq m$?} Not $d$. Held for 10 steps, a position taken just below $d$ is soon above it, because $x$ reverts to $m=1>d$. The expected 10-step return $g_{10}$ of \eqref{eq:g} changes sign at $x\approx-0.92$, and the ideal position rises from 0 to 1 between there and about $-0.3$. The right question was ``does the tree put its threshold in $[-0.9,-0.3]$?'', and $d$ itself is the target only for $h=1$.
+
+\textbf{Results.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item $h=1$ (target $d$): first split on $x$ in 100 datasets of 100, one split per tree, never a decoy; median threshold $0.000$, 95 of 100 within $0.1$ of $d$ ($s=2$). Test Sharpe per decision: tree 0.684, ideal rule 0.682, always the asset 0.270.
+\item $h=10$ (target $[-0.9,-0.3]$): first split on $x$ in 86 of 100, never first on a decoy, no split in 14; median $-0.46$, 90\% between $-1.53$ and $+0.01$. Test Sharpe per decision: tree 0.724, ideal 0.742, rule at $d$ 0.749, always the asset 0.628 (tree $-0.018\pm0.004$ against the ideal rule). Fifteen trees kept a second split on $x$, three a second-level split on the noise decoy.
+\item $k\times\sigma$ map ($h=10$, 600 trees): $x$ is found first in 95--100\% of the datasets when a regime lasts at least about one holding period ($k\le0.1$) and $\sigma\le20\%$; at $k=0.5$ (a regime of 2 steps) in 20--45\%, and then the usual outcome is no split, which is right (the ideal rule gains 0.01\% per decision). Over the 600 trees the noise decoy is the first split in 9 (1.5\%) and the moving average in 30 (5\%), almost all at $\sigma\ge20\%$.
+\item The sign change of $g_{10}$ moves with $k$ ($-0.04$, $-0.05$, $-0.16$, $-0.37$, $-0.92$, $-3.6$ for $k=0.01$ to $0.5$) and the tree's median thresholds follow it ($-0.02$, $+0.02$, $-0.04$, $-0.19$, $-0.47$, $-1.52$), staying between the sign change and $d$.
+\end{itemize}
+\begin{figure}[H]
+\centering\includegraphics[width=\linewidth]{first_recovery_histograms}
+\caption{First experiment: thresholds kept, 100 datasets per panel. \emph{Left:} $h=1$, target $d$. \emph{Right:} $h=10$, target between the sign change (dotted) and about $-0.3$.}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=\linewidth]{first_recovery_maps}
+\caption{First experiment, $h=10$, 20 datasets per cell: rows are the speed $k$ of $x$, columns the volatility of the price (edge in brackets).}
+\end{figure}
+\textbf{Why it was not enough.} An edge of 0.95 means the regime is visible in a handful of decisions; the experiments of the main report on real data worked near 0.07. The present run repeats the test at 0.02--0.10, which is what connects it to markets.
+
+\section{What changed in the code}\label{sec:code}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \code{recovery_test.py}: the time unit is the trading day (252 a year); the tree sees $x$ alone; $d=m$; the training and test spans are given in days (15 and 5 years), so that every trading rate sees the same history; the drift is given as an edge $e=\mu/\sigma$; results are annualized by $252/h$.
+\item \code{recovery_figures.py}: the sweeps are trading rate $\times$ edge and trading rate $\times$ speed; the maps carry the annualized Sharpe ratios; a summary table is printed by \code{plot}.
+\item \code{main.py}, one definition: the Sharpe ratio of a path with fewer than two periods stays undefined, but a path with constant zero net returns (all cash, no trade) now has a Sharpe ratio of $0$ instead of NaN. Every comparison ``$\text{Sharpe}_{\text{with split}}>\text{Sharpe}_{\text{without}}$'' was false when the tree without the split sat in cash, so pruning removed every such split, however good; with a zero-mean asset this happened in most datasets. A unit test covers it.
+\end{itemize}
+
+\section{What this test says, and what it does not}\label{sec:says}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{The mechanism works at market sizes.} With a regime drift of $\pm25\%$ a year and a feature that persists for a month, the tree recovers the planted threshold at every trading rate and delivers most of the attainable Sharpe ratio out of sample. At $\pm13\%$ it degrades gracefully; at $\pm5\%$ it correctly finds nothing.
+\item \textbf{Deciding more often does not teach more about a slow signal} (daily to weekly are equivalent), but deciding too rarely loses the fast part of the signal and the number of decisions to learn from.
+\item \textbf{Tail leaves.} With 3{,}780 daily rows the minimum of 20 decisions per leaf is 0.7\% of the data, and pruning lets some second-level splits in the tails through (the bars at $\pm1.5$ of Figure~\ref{fig:hist}); they cost little here but the minimum leaf size should scale with the number of rows.
+\item \textbf{Not shown:} decoys at these edges, an unconditional premium of the asset, several assets, a regime depending on more than one threshold, volatility that changes with the regime.
 \end{itemize}
 
 \section{How to reproduce}
-\begin{itemize}
-\item \texttt{python recovery\_test.py}: one dataset, printed in detail (5 seconds).
-\item \texttt{python recovery\_figures.py run}: all experiments, 800 fits in parallel (about 14 minutes on this machine).\item \texttt{python recovery\_figures.py plot}: the figures, written to \texttt{report/figures/}.
-\item The rows are checked by five unit tests (\texttt{tests/test\_recovery.py}): alignment of features and returns, the covariance, and no look-ahead.
+Code and results are in \code{PaperAlgo}; the results were produced with \code{synthetic_data.py} as committed in \code{eae145c} (one volatility for both regimes).
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \code{python recovery_test.py}: one dataset, printed in detail (about 10 s).
+\item \code{python recovery_figures.py run}: the 2{,}000 fits in parallel, 103 minutes on 10 cores; writes \code{report/figures/recovery_results.json}.
+\item \code{python recovery_figures.py plot}: the figures and the summary table of Tables~\ref{tab:edge}--\ref{tab:k}.
+\item \code{python -m unittest discover -s tests}: 52 tests, including the alignment and no-look-ahead checks of the rows and the Sharpe-of-cash convention.
 \end{itemize}
 \end{document}

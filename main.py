@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Readable SPO portfolio tree using only NumPy.
 
-Install:  python -m pip install numpy, scipy 
+Install:  python -m pip install numpy, scipy
 Demo:     python main.py
 Tests:    python -m unittest discover -s tests
 
@@ -78,20 +78,22 @@ import numpy as np
 # 1. All investment and tree choices live in these configurations.
 @dataclass(frozen=True)
 class PortfolioConfig:
-    max_weight: float = 1.0        # long-only: 0 <= weight <= max_weight, sum == 1
+    max_weight: float = 1.0  # long-only: 0 <= weight <= max_weight, sum == 1
     fee_rate: float | tuple[float, ...] = 0.001  # per traded notional, per asset
-    risk_aversion: float = 1.0     # > 0; multiplies weights @ Sigma @ weights
+    risk_aversion: float = 1.0  # > 0; multiplies weights @ Sigma @ weights
 
 
 @dataclass(frozen=True)
 class TreeConfig:
-    max_depth: int = 4            # root depth is 0; zero means one leaf
+    max_depth: int = 4  # root depth is 0; zero means one leaf
     min_samples_leaf: int = 10
     max_thresholds: int | None = 10  # None tests every distinct partition
     min_regret_improvement: float = 1e-6  # average gain per observation at node
-    shortlist_size: int = 3       # screened splits per leaf that get a full fit and replay
+    shortlist_size: int = 3  # screened splits per leaf that get a full fit and replay
     min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
-    validation_fraction: float = 0.0  # last share of the rows, kept aside to prune splits; 0 = no pruning
+    validation_fraction: float = (
+        0.0  # last share of the rows, kept aside to prune splits; 0 = no pruning
+    )
     prediction_bound: float = 0.10  # leaf scores restricted to +/- this
     search_passes: int = 3
     search_grid_size: int = 7
@@ -99,7 +101,7 @@ class TreeConfig:
     verbose: bool = False
 
 
-MAX_ASSETS = 4             # the exact solver enumerates 5**n_assets cases
+MAX_ASSETS = 4  # the exact solver enumerates 5**n_assets cases
 WEIGHT_TOLERANCE = 1e-9
 
 
@@ -116,8 +118,9 @@ def covariance_rows(Sigma, rows, n_assets):
     if Sigma.shape == (n_assets, n_assets):
         Sigma = np.broadcast_to(Sigma, (rows, n_assets, n_assets))
     if Sigma.shape != (rows, n_assets, n_assets):
-        raise ValueError("Sigma must have shape (n_assets, n_assets) "
-                         "or (N, n_assets, n_assets).")
+        raise ValueError(
+            "Sigma must have shape (n_assets, n_assets) or (N, n_assets, n_assets)."
+        )
     return Sigma
 
 
@@ -142,13 +145,16 @@ class PortfolioOptimizer:
         if not np.isfinite([config.max_weight, config.risk_aversion]).all():
             raise ValueError("Portfolio parameters must be finite.")
         if not 0 < config.max_weight <= 1 or n_assets * config.max_weight < 1:
-            raise ValueError("max_weight must be in (0, 1] and n_assets * max_weight >= 1.")
+            raise ValueError(
+                "max_weight must be in (0, 1] and n_assets * max_weight >= 1."
+            )
         if config.risk_aversion <= 0:
             # A positive penalty makes the optimal portfolio unique, so the
             # regret of a prediction does not depend on how it is computed.
             raise ValueError("risk_aversion must be > 0.")
-        self.fees = np.broadcast_to(np.asarray(config.fee_rate, dtype=float),
-                                    (n_assets,)).copy()
+        self.fees = np.broadcast_to(
+            np.asarray(config.fee_rate, dtype=float), (n_assets,)
+        ).copy()
         if not np.isfinite(self.fees).all() or np.any(self.fees < 0):
             raise ValueError("fee_rate must be nonnegative, scalar or per asset.")
 
@@ -159,28 +165,44 @@ class PortfolioOptimizer:
         for n_free in range(n_assets + 1):
             for free in combinations(range(n_assets), n_free):
                 fixed = [i for i in range(n_assets) if i not in free]
-                combos = list(product(product((0, 1, 2), repeat=len(fixed)),
-                                      product((1.0, -1.0), repeat=n_free)))
+                combos = list(
+                    product(
+                        product((0, 1, 2), repeat=len(fixed)),
+                        product((1.0, -1.0), repeat=n_free),
+                    )
+                )
                 states = np.array([s for s, _ in combos], dtype=int)
                 sides = np.array([d for _, d in combos], dtype=float)
-                self._cases.append((list(free), fixed,
-                                    states.reshape(len(combos), len(fixed)),
-                                    sides.reshape(len(combos), n_free)))
+                self._cases.append(
+                    (
+                        list(free),
+                        fixed,
+                        states.reshape(len(combos), len(fixed)),
+                        sides.reshape(len(combos), n_free),
+                    )
+                )
 
     def is_feasible(self, weights):
         """True when every row is long-only, capped, and fully invested."""
         w, tol = np.asarray(weights, dtype=float), WEIGHT_TOLERANCE
-        return bool(np.isfinite(w).all() and np.all(w >= -tol)
-                    and np.all(w <= self.config.max_weight + tol)
-                    and np.all(np.abs(w.sum(axis=-1) - 1) <= tol))
+        return bool(
+            np.isfinite(w).all()
+            and np.all(w >= -tol)
+            and np.all(w <= self.config.max_weight + tol)
+            and np.all(np.abs(w.sum(axis=-1) - 1) <= tol)
+        )
 
     def utility(self, returns, weights, starting_weights, covariance):
         """returns @ w - fees @ |w - u| - risk_aversion * w @ Sigma @ w, per row."""
-        r, w, u, S = (np.asarray(a, dtype=float)
-                      for a in (returns, weights, starting_weights, covariance))
-        return (np.einsum("...i,...i->...", r, w)
-                - np.abs(w - u) @ self.fees
-                - self.config.risk_aversion * np.einsum("...i,...ij,...j->...", w, S, w))
+        r, w, u, S = (
+            np.asarray(a, dtype=float)
+            for a in (returns, weights, starting_weights, covariance)
+        )
+        return (
+            np.einsum("...i,...i->...", r, w)
+            - np.abs(w - u) @ self.fees
+            - self.config.risk_aversion * np.einsum("...i,...ij,...j->...", w, S, w)
+        )
 
     def solve(self, scores, starting_weights, covariance):
         """Optimal weights for each row; all-single inputs give one portfolio.
@@ -198,22 +220,29 @@ class PortfolioOptimizer:
             W = np.empty((len(states), rows, self.n_assets))
             for j, asset in enumerate(fixed):
                 state = states[:, j, None]
-                W[:, :, asset] = np.where(state == 0, 0.0,
-                                          np.where(state == 1, cap, u[:, asset]))
+                W[:, :, asset] = np.where(
+                    state == 0, 0.0, np.where(state == 1, cap, u[:, asset])
+                )
             if free:
                 # Free weights solve  A w + nu = g  and  sum(w) = budget,
                 # with A = 2 * lam * Sigma[free, free] and nu the budget multiplier.
                 A_inv = np.linalg.inv(2 * lam * S[:, free][:, :, free])
-                g = (c[:, free] - sides[:, None, :] * self.fees[free]
-                     - 2 * lam * np.einsum("rij,krj->kri",
-                                           S[:, free][:, :, fixed], W[:, :, fixed]))
+                g = (
+                    c[:, free]
+                    - sides[:, None, :] * self.fees[free]
+                    - 2
+                    * lam
+                    * np.einsum("rij,krj->kri", S[:, free][:, :, fixed], W[:, :, fixed])
+                )
                 budget = 1.0 - W[:, :, fixed].sum(axis=-1)
                 A_inv_g = np.einsum("rij,krj->kri", A_inv, g)
                 A_inv_1 = A_inv.sum(axis=-1)
                 nu = (A_inv_g.sum(axis=-1) - budget) / A_inv_1.sum(axis=-1)
                 w_free = A_inv_g - nu[..., None] * A_inv_1
                 W[:, :, free] = w_free
-                valid = np.all(sides[:, None, :] * (w_free - u[:, free]) >= -tol, axis=-1)
+                valid = np.all(
+                    sides[:, None, :] * (w_free - u[:, free]) >= -tol, axis=-1
+                )
             else:
                 valid = np.abs(W.sum(axis=-1) - 1.0) <= tol
             # Bounds apply to every weight, including one held at a starting
@@ -232,15 +261,24 @@ class PortfolioOptimizer:
     def _rows(self, scores, starting_weights, covariance):
         """Validate inputs and broadcast them to (rows, n), (rows, n), (rows, n, n)."""
         n = self.n_assets
-        c, u, S = (np.asarray(a, dtype=float)
-                   for a in (scores, starting_weights, covariance))
+        c, u, S = (
+            np.asarray(a, dtype=float) for a in (scores, starting_weights, covariance)
+        )
         single = c.ndim == 1 and u.ndim == 1 and S.ndim == 2
         c, u = np.atleast_2d(c), np.atleast_2d(u)
         S = S[None] if S.ndim == 2 else S
-        if (c.ndim != 2 or u.ndim != 2 or S.ndim != 3 or c.shape[1] != n
-                or u.shape[1] != n or S.shape[1:] != (n, n)):
-            raise ValueError("Expect scores and starting weights with n_assets "
-                             "columns and covariance matrices of n_assets x n_assets.")
+        if (
+            c.ndim != 2
+            or u.ndim != 2
+            or S.ndim != 3
+            or c.shape[1] != n
+            or u.shape[1] != n
+            or S.shape[1:] != (n, n)
+        ):
+            raise ValueError(
+                "Expect scores and starting weights with n_assets "
+                "columns and covariance matrices of n_assets x n_assets."
+            )
         rows = max(len(c), len(u), len(S))
         if any(len(a) not in (1, rows) for a in (c, u, S)):
             raise ValueError("Inputs must have one row or the same number of rows.")
@@ -262,29 +300,38 @@ class PortfolioOptimizer:
 @dataclass(frozen=True)
 class PathResult:
     """What a strategy did in each period, in row order."""
-    holdings: np.ndarray        # (T, n) pre-trade weights, drifted from the last period
-    weights: np.ndarray         # (T, n) post-trade weights held over the period
-    turnover: np.ndarray        # (T,) sum(|weights - holdings|)
-    fees: np.ndarray            # (T,) fee_rate @ |weights - holdings|, fraction of equity
-    gross_returns: np.ndarray   # (T,) returns @ weights
-    net_returns: np.ndarray     # (T,) gross_returns - fees
-    utility: np.ndarray         # (T,) net_returns - risk_aversion * weights @ Sigma @ weights
-    regret: np.ndarray          # (T,) best utility in hindsight from the same holdings - utility
+
+    holdings: np.ndarray  # (T, n) pre-trade weights, drifted from the last period
+    weights: np.ndarray  # (T, n) post-trade weights held over the period
+    turnover: np.ndarray  # (T,) sum(|weights - holdings|)
+    fees: np.ndarray  # (T,) fee_rate @ |weights - holdings|, fraction of equity
+    gross_returns: np.ndarray  # (T,) returns @ weights
+    net_returns: np.ndarray  # (T,) gross_returns - fees
+    utility: np.ndarray  # (T,) net_returns - risk_aversion * weights @ Sigma @ weights
+    regret: (
+        np.ndarray
+    )  # (T,) best utility in hindsight from the same holdings - utility
     final_holdings: np.ndarray  # (n,) drifted weights after the last period
 
     @property
     def sharpe(self) -> float:
-        """Per-period Sharpe ratio of net returns; NaN with fewer than 2 periods."""
+        """Per-period Sharpe ratio of net returns; NaN with fewer than 2 periods.
+
+        A path that never takes risk and never earns (all cash, no fees) has a
+        Sharpe ratio of 0, so a split can be judged against an all-cash tree.
+        """
         if len(self.net_returns) < 2:
             return float("nan")
         std = self.net_returns.std(ddof=1)
-        return float(self.net_returns.mean() / std) if std > 0 else float("nan")
+        if std > 0:
+            return float(self.net_returns.mean() / std)
+        return 0.0 if self.net_returns.mean() == 0 else float("nan")
 
     @property
     def max_drawdown(self) -> float:
         """Largest fall of net wealth below its running peak (-0.25 means -25%)."""
         wealth = np.cumprod(1 + self.net_returns)
-        peak = np.maximum.accumulate(np.r_[1.0, wealth])[1:]   # wealth starts at 1
+        peak = np.maximum.accumulate(np.r_[1.0, wealth])[1:]  # wealth starts at 1
         return float(np.min(wealth / peak - 1))
 
     def summary(self, periods_per_year=52):
@@ -298,7 +345,9 @@ class PathResult:
         scale = float(np.sqrt(periods_per_year))
         volatility = self.net_returns.std(ddof=1) if periods > 1 else float("nan")
         return {
-            "return": float(np.prod(1 + self.net_returns) ** (periods_per_year / periods) - 1),
+            "return": float(
+                np.prod(1 + self.net_returns) ** (periods_per_year / periods) - 1
+            ),
             "volatility": float(volatility) * scale,
             "sharpe": self.sharpe * scale,
             "max_drawdown": self.max_drawdown,
@@ -321,11 +370,14 @@ def replay_path(optimizer, scores, returns, covariance, initial_weights=None):
     C = finite_array(scores, "scores", 2)
     if C.shape != R.shape:
         raise ValueError("scores and returns must both have shape (T, n_assets).")
-    return _trade(optimizer, lambda t, holdings: optimizer.solve(C[t], holdings, S[t]),
-                  R, S, u)
+    return _trade(
+        optimizer, lambda t, holdings: optimizer.solve(C[t], holdings, S[t]), R, S, u
+    )
 
 
-def replay_constant_weights(optimizer, weights, returns, covariance, initial_weights=None):
+def replay_constant_weights(
+    optimizer, weights, returns, covariance, initial_weights=None
+):
     """Rebalance to the same target weights every period, e.g. equal weights.
 
     Same accounting as replay_path, but the target ignores costs: every period
@@ -334,8 +386,9 @@ def replay_constant_weights(optimizer, weights, returns, covariance, initial_wei
     R, S, u = _path_inputs(optimizer, returns, covariance, initial_weights)
     target = finite_array(weights, "weights", 1)
     if target.shape != (optimizer.n_assets,) or not optimizer.is_feasible(target):
-        raise ValueError("weights must be a long-only, fully-invested portfolio "
-                         "within max_weight.")
+        raise ValueError(
+            "weights must be a long-only, fully-invested portfolio within max_weight."
+        )
     return _trade(optimizer, lambda t, holdings: target, R, S, u)
 
 
@@ -352,7 +405,9 @@ def _path_inputs(optimizer, returns, covariance, initial_weights):
         return R, S, np.full(n, 1.0 / n)
     u = finite_array(initial_weights, "initial_weights", 1)
     if u.shape != (n,) or np.any(u < 0) or abs(u.sum() - 1) > 1e-6:
-        raise ValueError("initial_weights must be n_assets nonnegative weights summing to 1.")
+        raise ValueError(
+            "initial_weights must be n_assets nonnegative weights summing to 1."
+        )
     return R, S, u / u.sum()
 
 
@@ -363,16 +418,24 @@ def _trade(optimizer, decide, R, S, u):
         holdings[t] = u
         weights[t] = decide(t, u)
         grown = weights[t] * (1 + R[t])
-        u = grown / grown.sum()          # grown.sum() == 1 + r_t @ w_t
+        u = grown / grown.sum()  # grown.sum() == 1 + r_t @ w_t
 
     trades = np.abs(weights - holdings)
     fees = trades @ optimizer.fees
     gross = np.einsum("ti,ti->t", R, weights)
     utility = optimizer.utility(R, weights, holdings, S)
     best = optimizer.utility(R, optimizer.solve(R, holdings, S), holdings, S)
-    return PathResult(holdings=holdings, weights=weights, turnover=trades.sum(axis=1),
-                      fees=fees, gross_returns=gross, net_returns=gross - fees,
-                      utility=utility, regret=best - utility, final_holdings=u)
+    return PathResult(
+        holdings=holdings,
+        weights=weights,
+        turnover=trades.sum(axis=1),
+        fees=fees,
+        gross_returns=gross,
+        net_returns=gross - fees,
+        utility=utility,
+        regret=best - utility,
+        final_holdings=u,
+    )
 
 
 @dataclass
@@ -389,24 +452,30 @@ class Node:
 @dataclass(frozen=True)
 class SplitRecord:
     """One accepted split, in the order training accepted them."""
+
     depth: int
     n_samples: int
     feature: int
     threshold: float
-    regret_gain: float      # regret reduction per row of the split leaf, vs the refitted leaf
-    sharpe_before: float    # Sharpe ratio of the replayed training path
+    regret_gain: (
+        float  # regret reduction per row of the split leaf, vs the refitted leaf
+    )
+    sharpe_before: float  # Sharpe ratio of the replayed training path
     sharpe_after: float
 
 
 @dataclass(frozen=True)
 class PruneRecord:
     """One split judged on the checking rows, in the bottom-up order of pruning."""
+
     depth: int
     feature: int
     threshold: float
-    regret_with: float      # mean regret on the checking rows, with the split and all below it
-    regret_without: float   # the same with the node as a single leaf
-    sharpe_with: float      # Sharpe ratio on the checking rows
+    regret_with: (
+        float  # mean regret on the checking rows, with the split and all below it
+    )
+    regret_without: float  # the same with the node as a single leaf
+    sharpe_with: float  # Sharpe ratio on the checking rows
     sharpe_without: float
     kept: bool
 
@@ -419,19 +488,35 @@ class SPOPortfolioTree:
         self.root = None
         self.growth_log: list[SplitRecord] = []
         self.pruning_log: list[PruneRecord] = []
-        if (config.max_depth < 0 or config.min_samples_leaf < 1
-                or (config.max_thresholds is not None and config.max_thresholds < 1)
-                or config.shortlist_size < 1
-                or config.search_passes < 1 or config.search_grid_size < 3):
+        if (
+            config.max_depth < 0
+            or config.min_samples_leaf < 1
+            or (config.max_thresholds is not None and config.max_thresholds < 1)
+            or config.shortlist_size < 1
+            or config.search_passes < 1
+            or config.search_grid_size < 3
+        ):
             raise ValueError("Invalid tree depth, leaf size, or search settings.")
-        if (not np.isfinite([config.min_regret_improvement, config.min_sharpe_improvement,
-                             config.prediction_bound, config.regret_tolerance,
-                             config.validation_fraction]).all()
-                or config.min_regret_improvement < 0 or config.min_sharpe_improvement < 0
-                or config.prediction_bound <= 0 or config.regret_tolerance <= 0
-                or not 0 <= config.validation_fraction < 1):
-            raise ValueError("Invalid improvement thresholds, prediction bound, "
-                             "regret tolerance, or validation fraction.")
+        if (
+            not np.isfinite(
+                [
+                    config.min_regret_improvement,
+                    config.min_sharpe_improvement,
+                    config.prediction_bound,
+                    config.regret_tolerance,
+                    config.validation_fraction,
+                ]
+            ).all()
+            or config.min_regret_improvement < 0
+            or config.min_sharpe_improvement < 0
+            or config.prediction_bound <= 0
+            or config.regret_tolerance <= 0
+            or not 0 <= config.validation_fraction < 1
+        ):
+            raise ValueError(
+                "Invalid improvement thresholds, prediction bound, "
+                "regret tolerance, or validation fraction."
+            )
 
     def fit(self, X, R, Sigma, initial_weights=None):
         """Grow the tree on chronological rows while it trades its own holdings.
@@ -462,8 +547,10 @@ class SPOPortfolioTree:
         n_check = int(round(self.config.validation_fraction * len(X)))
         n_fit = len(X) - n_check
         if self.config.validation_fraction > 0 and min(n_fit, n_check) < 2:
-            raise ValueError("validation_fraction must leave at least 2 fitting rows "
-                             "and 2 checking rows.")
+            raise ValueError(
+                "validation_fraction must leave at least 2 fitting rows "
+                "and 2 checking rows."
+            )
         self.n_features = X.shape[1]
         self._initial_weights = initial_weights
         try:
@@ -500,7 +587,8 @@ class SPOPortfolioTree:
         equal = np.full((len(X), n), 1.0 / n)
         self._U = equal
         self._benchmarks = self.optimizer.utility(
-            self._R, self.optimizer.solve(self._R, equal, self._S), equal, self._S)
+            self._R, self.optimizer.solve(self._R, equal, self._S), equal, self._S
+        )
         root = self._fit_leaf(rows)
         leaves = [(root, rows, 0)]
         scores = np.tile(root.prediction, (len(X), 1))
@@ -512,21 +600,40 @@ class SPOPortfolioTree:
             split = self._best_split(leaves, scores, path.sharpe)
             if split is None:
                 break
-            (position, feature, threshold, left, right,
-             left_rows, right_rows, gain, new_path) = split
+            (
+                position,
+                feature,
+                threshold,
+                left,
+                right,
+                left_rows,
+                right_rows,
+                gain,
+                new_path,
+            ) = split
             node, node_rows, depth = leaves.pop(position)
             node.feature, node.threshold = feature, float(threshold)
             node.left, node.right = left, right
             leaves += [(left, left_rows, depth + 1), (right, right_rows, depth + 1)]
             scores[left_rows], scores[right_rows] = left.prediction, right.prediction
-            self.growth_log.append(SplitRecord(
-                depth, len(node_rows), feature, float(threshold), gain,
-                path.sharpe, new_path.sharpe))
+            self.growth_log.append(
+                SplitRecord(
+                    depth,
+                    len(node_rows),
+                    feature,
+                    float(threshold),
+                    gain,
+                    path.sharpe,
+                    new_path.sharpe,
+                )
+            )
             if self.config.verbose:
-                print(f"split {len(self.growth_log)}: depth={depth}, "
-                      f"N={len(node_rows)}, x[{feature}] <= {threshold:.5g}, "
-                      f"regret -{gain:.3g} per row, "
-                      f"Sharpe {path.sharpe:.4f} -> {new_path.sharpe:.4f}")
+                print(
+                    f"split {len(self.growth_log)}: depth={depth}, "
+                    f"N={len(node_rows)}, x[{feature}] <= {threshold:.5g}, "
+                    f"regret -{gain:.3g} per row, "
+                    f"Sharpe {path.sharpe:.4f} -> {new_path.sharpe:.4f}"
+                )
             path = new_path
             self._measure_from(path)
         return root, leaves, scores, path
@@ -548,7 +655,9 @@ class SPOPortfolioTree:
         def checking_path():
             scores = self._scores(self._leaves(root, X), len(X))
             holdings = self._replay(scores[:n_fit]).final_holdings
-            return replay_path(self.optimizer, scores[n_fit:], R[n_fit:], Sigma[n_fit:], holdings)
+            return replay_path(
+                self.optimizer, scores[n_fit:], R[n_fit:], Sigma[n_fit:], holdings
+            )
 
         def visit(node, rows, depth):
             if node.feature is None:
@@ -557,27 +666,55 @@ class SPOPortfolioTree:
             visit(node.left, rows[left], depth + 1)
             visit(node.right, rows[~left], depth + 1)
             with_split = checking_path()
-            self._measure_from(self._replay(self._scores(self._leaves(root, self._X), n_fit)))
+            self._measure_from(
+                self._replay(self._scores(self._leaves(root, self._X), n_fit))
+            )
             leaf = self._fit_leaf(rows, node.prediction)
-            split = (node.feature, node.threshold, node.left, node.right,
-                     node.prediction, node.regret_sum)
+            split = (
+                node.feature,
+                node.threshold,
+                node.left,
+                node.right,
+                node.prediction,
+                node.regret_sum,
+            )
             node.feature = node.threshold = node.left = node.right = None
             node.prediction, node.regret_sum = leaf.prediction, leaf.regret_sum
             without = checking_path()
-            kept = bool(without.regret.mean() - with_split.regret.mean() > c.min_regret_improvement
-                        and with_split.sharpe > without.sharpe + c.min_sharpe_improvement)
+            kept = bool(
+                without.regret.mean() - with_split.regret.mean()
+                > c.min_regret_improvement
+                and with_split.sharpe > without.sharpe + c.min_sharpe_improvement
+            )
             if kept:
-                (node.feature, node.threshold, node.left, node.right,
-                 node.prediction, node.regret_sum) = split
-            self.pruning_log.append(PruneRecord(
-                depth, split[0], split[1], float(with_split.regret.mean()),
-                float(without.regret.mean()), with_split.sharpe, without.sharpe, kept))
+                (
+                    node.feature,
+                    node.threshold,
+                    node.left,
+                    node.right,
+                    node.prediction,
+                    node.regret_sum,
+                ) = split
+            self.pruning_log.append(
+                PruneRecord(
+                    depth,
+                    split[0],
+                    split[1],
+                    float(with_split.regret.mean()),
+                    float(without.regret.mean()),
+                    with_split.sharpe,
+                    without.sharpe,
+                    kept,
+                )
+            )
             if c.verbose:
-                print(f"prune check: depth={depth}, x[{split[0]}] <= {split[1]:.5g}, "
-                      f"checking regret {without.regret.mean():.5f} -> "
-                      f"{with_split.regret.mean():.5f} with the split, "
-                      f"Sharpe {without.sharpe:.4f} -> {with_split.sharpe:.4f} "
-                      f"({'kept' if kept else 'removed'})")
+                print(
+                    f"prune check: depth={depth}, x[{split[0]}] <= {split[1]:.5g}, "
+                    f"checking regret {without.regret.mean():.5f} -> "
+                    f"{with_split.regret.mean():.5f} with the split, "
+                    f"Sharpe {without.sharpe:.4f} -> {with_split.sharpe:.4f} "
+                    f"({'kept' if kept else 'removed'})"
+                )
 
         visit(root, np.arange(n_fit), 0)
 
@@ -587,8 +724,9 @@ class SPOPortfolioTree:
         if node.feature is None:
             return [(node, rows, depth)]
         left = X[rows, node.feature] <= node.threshold
-        return (self._leaves(node.left, X, rows[left], depth + 1)
-                + self._leaves(node.right, X, rows[~left], depth + 1))
+        return self._leaves(node.left, X, rows[left], depth + 1) + self._leaves(
+            node.right, X, rows[~left], depth + 1
+        )
 
     def _scores(self, leaves, n_rows):
         """Per-row scores from a list of (leaf, rows, depth)."""
@@ -599,7 +737,9 @@ class SPOPortfolioTree:
 
     def _replay(self, scores):
         """Replay per-row scores on the training rows (holdings used for regrets unchanged)."""
-        return replay_path(self.optimizer, scores, self._R, self._S, self._initial_weights)
+        return replay_path(
+            self.optimizer, scores, self._R, self._S, self._initial_weights
+        )
 
     def _measure_from(self, path):
         """From now on, measure regrets from the holdings of this replayed path."""
@@ -622,15 +762,36 @@ class SPOPortfolioTree:
                 right = self._fit_leaf(right_rows, parent.prediction)
                 reduction = parent.regret_sum - left.regret_sum - right.regret_sum
                 if reduction / len(rows) > c.min_regret_improvement:
-                    candidates.append((reduction, position, feature, threshold,
-                                       left, right, left_rows, right_rows))
+                    candidates.append(
+                        (
+                            reduction,
+                            position,
+                            feature,
+                            threshold,
+                            left,
+                            right,
+                            left_rows,
+                            right_rows,
+                        )
+                    )
         # The SPO loss chooses (largest total regret reduction over all leaves,
         # as in SPOT); the replayed Sharpe must confirm, else the next one is tried.
         candidates.sort(key=lambda candidate: candidate[0], reverse=True)
-        for (reduction, position, feature, threshold,
-             left, right, left_rows, right_rows) in candidates:
+        for (
+            reduction,
+            position,
+            feature,
+            threshold,
+            left,
+            right,
+            left_rows,
+            right_rows,
+        ) in candidates:
             candidate = scores.copy()
-            candidate[left_rows], candidate[right_rows] = left.prediction, right.prediction
+            candidate[left_rows], candidate[right_rows] = (
+                left.prediction,
+                right.prediction,
+            )
             path = self._replay(candidate)
             # TODO: a split is judged as a whole, so a profitable split whose
             # feature is noisy around the threshold still gets in and pays
@@ -638,8 +799,17 @@ class SPOPortfolioTree:
             # module docstring).
             if path.sharpe > sharpe + c.min_sharpe_improvement:  # NaN never qualifies
                 gain = reduction / len(leaves[position][1])
-                return (position, feature, threshold, left, right,
-                        left_rows, right_rows, gain, path)
+                return (
+                    position,
+                    feature,
+                    threshold,
+                    left,
+                    right,
+                    left_rows,
+                    right_rows,
+                    gain,
+                    path,
+                )
         return None
 
     def _shortlist(self, rows):
@@ -650,17 +820,26 @@ class SPOPortfolioTree:
         for feature in range(self.n_features):
             values = self._X[rows, feature]
             for threshold in self._thresholds(values):
-                left_rows, right_rows = rows[values <= threshold], rows[values > threshold]
+                left_rows, right_rows = (
+                    rows[values <= threshold],
+                    rows[values > threshold],
+                )
                 if min(len(left_rows), len(right_rows)) < c.min_samples_leaf:
                     continue
                 regret = sum(
-                    self._score_prediction(np.clip(self._R[part].mean(axis=0),
-                                                   -c.prediction_bound, c.prediction_bound),
-                                           part)
-                    for part in (left_rows, right_rows))
+                    self._score_prediction(
+                        np.clip(
+                            self._R[part].mean(axis=0),
+                            -c.prediction_bound,
+                            c.prediction_bound,
+                        ),
+                        part,
+                    )
+                    for part in (left_rows, right_rows)
+                )
                 screened.append((regret, feature, threshold, left_rows, right_rows))
         screened.sort(key=lambda split: split[0])
-        return [split[1:] for split in screened[:c.shortlist_size]]
+        return [split[1:] for split in screened[: c.shortlist_size]]
 
     def _refit_leaves(self, leaves, scores, path, on_all_rows=False):
         """Refit every leaf score on the final holdings; keep it if Sharpe holds.
@@ -679,16 +858,20 @@ class SPOPortfolioTree:
             for refit, (node, _, _) in zip(refits, leaves):
                 node.prediction, node.regret_sum = refit.prediction, refit.regret_sum
         if self.config.verbose:
-            print(f"refit leaf scores{' on all rows' if on_all_rows else ''}: "
-                  f"Sharpe {path.sharpe:.4f} -> {refit_path.sharpe:.4f} "
-                  f"({'always kept' if on_all_rows else 'kept' if kept else 'discarded'})")
+            print(
+                f"refit leaf scores{' on all rows' if on_all_rows else ''}: "
+                f"Sharpe {path.sharpe:.4f} -> {refit_path.sharpe:.4f} "
+                f"({'always kept' if on_all_rows else 'kept' if kept else 'discarded'})"
+            )
 
     def _score_prediction(self, prediction, indices):
         R, U, S = self._R[indices], self._U[indices], self._S[indices]
         weights = self.optimizer.solve(prediction, U, S)
         regret = self._benchmarks[indices] - self.optimizer.utility(R, weights, U, S)
         if np.min(regret) < -self.config.regret_tolerance:
-            raise RuntimeError("Negative regret exceeds tolerance; check solver accuracy.")
+            raise RuntimeError(
+                "Negative regret exceeds tolerance; check solver accuracy."
+            )
         # Clip only negligible numerical negatives, not meaningful discrepancies.
         return float(np.maximum(regret, 0).sum())
 
@@ -709,7 +892,9 @@ class SPOPortfolioTree:
         radius = 2 * bound
         for pass_number in range(c.search_passes):
             for asset in range(self.optimizer.n_assets):
-                lower = -bound if pass_number == 0 else max(-bound, best[asset] - radius)
+                lower = (
+                    -bound if pass_number == 0 else max(-bound, best[asset] - radius)
+                )
                 upper = bound if pass_number == 0 else min(bound, best[asset] + radius)
                 for value in np.linspace(lower, upper, c.search_grid_size):
                     candidate = best.copy()
@@ -717,7 +902,7 @@ class SPOPortfolioTree:
                     loss = self._score_prediction(candidate, indices)
                     if loss < best_loss:
                         best, best_loss = candidate, loss
-            radius /= (c.search_grid_size - 1)
+            radius /= c.search_grid_size - 1
         return Node(best, len(indices), best_loss)
 
     def _thresholds(self, values):
@@ -727,8 +912,9 @@ class SPOPortfolioTree:
         # partition in that case by using the lower endpoint with the <= rule.
         thresholds = np.where(thresholds >= unique[1:], unique[:-1], thresholds)
         left_sizes = np.cumsum(counts)[:-1]
-        valid = ((left_sizes >= self.config.min_samples_leaf)
-                 & (len(values) - left_sizes >= self.config.min_samples_leaf))
+        valid = (left_sizes >= self.config.min_samples_leaf) & (
+            len(values) - left_sizes >= self.config.min_samples_leaf
+        )
         thresholds = thresholds[valid]
         limit = self.config.max_thresholds
         if limit is not None and len(thresholds) > limit:
@@ -756,27 +942,34 @@ class SPOPortfolioTree:
 
     def replay(self, X, R, Sigma, initial_weights=None):
         """Trade the frozen tree through the rows of X in order; see replay_path."""
-        return replay_path(self.optimizer, self.predict_returns(X), R, Sigma,
-                           initial_weights)
+        return replay_path(
+            self.optimizer, self.predict_returns(X), R, Sigma, initial_weights
+        )
 
     def describe(self, feature_names=None):
         """Print the frozen rules and leaf scores for inspection."""
         if self.root is None:
             raise RuntimeError("Call fit first.")
-        names = (list(feature_names) if feature_names is not None
-                 else [f"x[{j}]" for j in range(self.n_features)])
+        names = (
+            list(feature_names)
+            if feature_names is not None
+            else [f"x[{j}]" for j in range(self.n_features)]
+        )
         if len(names) != self.n_features:
             raise ValueError("feature_names has the wrong length.")
 
         def visit(node, indent=""):
             if node.feature is None:
-                print(f"{indent}leaf: N={node.n_samples}, "
-                      f"scores={np.round(node.prediction, 6)}")
+                print(
+                    f"{indent}leaf: N={node.n_samples}, "
+                    f"scores={np.round(node.prediction, 6)}"
+                )
             else:
                 print(f"{indent}if {names[node.feature]} <= {node.threshold:.6g}:")
                 visit(node.left, indent + "  ")
                 print(f"{indent}else:")
                 visit(node.right, indent + "  ")
+
         visit(self.root)
 
 
@@ -784,11 +977,12 @@ class SPOPortfolioTree:
 @dataclass(frozen=True)
 class WeeklyRows:
     """Aligned inputs for fit and replay, one row per weekly decision."""
-    dates: np.ndarray          # (T,) decision dates: the daily close of the chosen weekday
-    day_index: np.ndarray      # (T,) position of each decision date in the daily arrays
-    X: np.ndarray | None       # (T, features) your daily features on the decision dates
-    R: np.ndarray              # (T, n) simple return from this decision close to the next
-    Sigma: np.ndarray          # (T, n, n) weekly covariance from past daily returns
+
+    dates: np.ndarray  # (T,) decision dates: the daily close of the chosen weekday
+    day_index: np.ndarray  # (T,) position of each decision date in the daily arrays
+    X: np.ndarray | None  # (T, features) your daily features on the decision dates
+    R: np.ndarray  # (T, n) simple return from this decision close to the next
+    Sigma: np.ndarray  # (T, n, n) weekly covariance from past daily returns
 
 
 def weekly_covariance(closes, day, window=180, ridge=1e-6):
@@ -801,9 +995,9 @@ def weekly_covariance(closes, day, window=180, ridge=1e-6):
     P = finite_array(closes, "closes", 2)
     if not isinstance(window, int) or window < 2 or not window <= day < len(P):
         raise ValueError("Need window >= 2 daily returns before `day`, inside closes.")
-    if np.any(P[day - window:day + 1] <= 0) or ridge < 0:
+    if np.any(P[day - window : day + 1] <= 0) or ridge < 0:
         raise ValueError("Closes must be positive and ridge nonnegative.")
-    daily = P[day - window + 1:day + 1] / P[day - window:day] - 1
+    daily = P[day - window + 1 : day + 1] / P[day - window : day] - 1
     covariance = np.cov(daily, rowvar=False).reshape(P.shape[1], P.shape[1])
     return 7 * covariance + ridge * np.eye(P.shape[1])
 
@@ -825,29 +1019,39 @@ def weekly_rows(dates, closes, daily_features=None, weekday=0, window=180, ridge
     if days.shape != (len(P),):
         raise ValueError("dates must be 1-D with one date per row of closes.")
     if np.any(np.diff(days) != np.timedelta64(1, "D")):
-        raise ValueError("dates must be consecutive calendar days; fill or drop gaps first.")
+        raise ValueError(
+            "dates must be consecutive calendar days; fill or drop gaps first."
+        )
     if np.any(P <= 0):
         raise ValueError("closes must be positive prices.")
     if not isinstance(weekday, int) or not 0 <= weekday <= 6:
         raise ValueError("weekday must be an integer from 0 (Monday) to 6 (Sunday).")
     positions = np.arange(len(days))
-    day_of_week = (days.astype(np.int64) + 3) % 7   # 1970-01-01 was a Thursday
-    decisions = positions[(day_of_week == weekday) & (positions >= window)
-                          & (positions + 7 < len(days))]
+    day_of_week = (days.astype(np.int64) + 3) % 7  # 1970-01-01 was a Thursday
+    decisions = positions[
+        (day_of_week == weekday) & (positions >= window) & (positions + 7 < len(days))
+    ]
     if len(decisions) == 0:
-        raise ValueError("No weekly decision has a full covariance window and a next week.")
+        raise ValueError(
+            "No weekly decision has a full covariance window and a next week."
+        )
     X = None
     if daily_features is not None:
         F = np.asarray(daily_features, dtype=float)
         if F.ndim != 2 or len(F) != len(days):
-            raise ValueError("daily_features must be (days, features), aligned with dates.")
+            raise ValueError(
+                "daily_features must be (days, features), aligned with dates."
+            )
         X = F[decisions]
         if not np.isfinite(X).all():
             raise ValueError("daily_features must be finite on every decision date.")
     return WeeklyRows(
-        dates=days[decisions], day_index=decisions, X=X,
+        dates=days[decisions],
+        day_index=decisions,
+        X=X,
         R=P[decisions + 7] / P[decisions] - 1,
-        Sigma=np.array([weekly_covariance(P, d, window, ridge) for d in decisions]))
+        Sigma=np.array([weekly_covariance(P, d, window, ridge) for d in decisions]),
+    )
 
 
 # 6. Compare the tree with simple baselines on a training and a test period.
@@ -871,13 +1075,17 @@ def train_and_test(portfolio, config, rows, test_periods=52):
     strategies = {
         "SPO tree": lambda part, start: tree.replay(X[part], R[part], S[part], start),
         "tree without splits": lambda part, start: no_split.replay(
-            X[part], R[part], S[part], start),
+            X[part], R[part], S[part], start
+        ),
         "equal weight": lambda part, start: replay_constant_weights(
-            portfolio, equal, R[part], S[part], start),
+            portfolio, equal, R[part], S[part], start
+        ),
     }
     train_paths = {name: run(train, None) for name, run in strategies.items()}
-    test_paths = {name: run(test, train_paths[name].final_holdings)
-                  for name, run in strategies.items()}
+    test_paths = {
+        name: run(test, train_paths[name].final_holdings)
+        for name, run in strategies.items()
+    }
     return tree, train_paths, test_paths
 
 
@@ -885,13 +1093,17 @@ def performance_report(paths, periods_per_year=52):
     """One line per named path: annualized return, volatility and Sharpe, max
     drawdown, average turnover per period and fees per year."""
     width = max(len(name) for name in paths) + 2
-    lines = [f"{'':{width}}{'return':>9}{'volatility':>12}{'Sharpe':>8}"
-             f"{'max DD':>9}{'turnover':>10}{'fees/yr':>9}"]
+    lines = [
+        f"{'':{width}}{'return':>9}{'volatility':>12}{'Sharpe':>8}"
+        f"{'max DD':>9}{'turnover':>10}{'fees/yr':>9}"
+    ]
     for name, path in paths.items():
         s = path.summary(periods_per_year)
-        lines.append(f"{name:{width}}{s['return']:>9.1%}{s['volatility']:>12.1%}"
-                     f"{s['sharpe']:>8.2f}{s['max_drawdown']:>9.1%}"
-                     f"{s['turnover']:>10.2f}{s['fees']:>9.2%}")
+        lines.append(
+            f"{name:{width}}{s['return']:>9.1%}{s['volatility']:>12.1%}"
+            f"{s['sharpe']:>8.2f}{s['max_drawdown']:>9.1%}"
+            f"{s['turnover']:>10.2f}{s['fees']:>9.2%}"
+        )
     return "\n".join(lines)
 
 
@@ -906,42 +1118,69 @@ def demo():
     dates = np.arange(start, start + np.timedelta64(days, "D"))
     regime = np.repeat(rng.choice([-1.0, 1.0], size=days // 60 + 1), 60)[:days]
     drift = np.where(regime[:, None] > 0, [0.002, -0.001, 0.0], [-0.001, 0.002, 0.0])
-    daily_cov = 0.03 ** 2 * np.array([[1.0, 0.6, 0.5], [0.6, 1.0, 0.5], [0.5, 0.5, 1.0]])
+    daily_cov = 0.03**2 * np.array([[1.0, 0.6, 0.5], [0.6, 1.0, 0.5], [0.5, 0.5, 1.0]])
     closes = 100 * np.cumprod(
-        1 + drift + rng.multivariate_normal(np.zeros(3), daily_cov, days), axis=0)
+        1 + drift + rng.multivariate_normal(np.zeros(3), daily_cov, days), axis=0
+    )
 
     # Daily features: row d only uses closes up to day d.
-    names = ["momentum_28d_a0", "momentum_28d_a1", "momentum_7d_a0",
-             "volatility_28d_a0", "noise"]
+    names = [
+        "momentum_28d_a0",
+        "momentum_28d_a1",
+        "momentum_7d_a0",
+        "volatility_28d_a0",
+        "noise",
+    ]
     features = np.full((days, len(names)), np.nan)
     features[28:, 0] = closes[28:, 0] / closes[:-28, 0] - 1
     features[28:, 1] = closes[28:, 1] / closes[:-28, 1] - 1
     features[7:, 2] = closes[7:, 0] / closes[:-7, 0] - 1
     daily_a0 = closes[1:, 0] / closes[:-1, 0] - 1
-    features[28:, 3] = np.lib.stride_tricks.sliding_window_view(daily_a0, 28).std(axis=1)
+    features[28:, 3] = np.lib.stride_tricks.sliding_window_view(daily_a0, 28).std(
+        axis=1
+    )
     features[:, 4] = rng.normal(size=days)
 
     # One row per Monday close; the last 52 weeks are the test year. Of the
     # training weeks, the last quarter only prunes the tree (checking rows).
     rows = weekly_rows(dates, closes, features)
-    portfolio = PortfolioOptimizer(n_assets=3, config=PortfolioConfig(
-        max_weight=1.0, fee_rate=0.0003, risk_aversion=1.0,
-    ))
-    config = TreeConfig(max_depth=2, min_samples_leaf=20, max_thresholds=None,
-                        validation_fraction=0.25, verbose=True)
-    tree, train_paths, test_paths = train_and_test(portfolio, config, rows, test_periods=52)
+    portfolio = PortfolioOptimizer(
+        n_assets=3,
+        config=PortfolioConfig(
+            max_weight=1.0,
+            fee_rate=0.0003,
+            risk_aversion=1.0,
+        ),
+    )
+    config = TreeConfig(
+        max_depth=2,
+        min_samples_leaf=20,
+        max_thresholds=None,
+        validation_fraction=0.25,
+        verbose=True,
+    )
+    tree, train_paths, test_paths = train_and_test(
+        portfolio, config, rows, test_periods=52
+    )
     tree.describe(names)
     print(f"\nTrain: {len(train_paths['SPO tree'].net_returns)} weeks, annualized")
     print(performance_report(train_paths))
-    print(f"\nTest: {len(test_paths['SPO tree'].net_returns)} weeks, annualized, "
-          f"holdings carried over from training")
+    print(
+        f"\nTest: {len(test_paths['SPO tree'].net_returns)} weeks, annualized, "
+        f"holdings carried over from training"
+    )
     print(performance_report(test_paths))
 
     holdings = test_paths["SPO tree"].final_holdings
-    target = tree.predict_weights(features[-1:], holdings[None, :],
-                                  weekly_covariance(closes, days - 1))
-    print("\nLive decision at the last close: holdings", np.round(holdings, 3),
-          "-> target", np.round(target[0], 3))
+    target = tree.predict_weights(
+        features[-1:], holdings[None, :], weekly_covariance(closes, days - 1)
+    )
+    print(
+        "\nLive decision at the last close: holdings",
+        np.round(holdings, 3),
+        "-> target",
+        np.round(target[0], 3),
+    )
     print("Synthetic demonstration only; no market data or orders are sent.")
 
 

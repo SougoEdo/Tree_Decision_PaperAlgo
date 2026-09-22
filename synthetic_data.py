@@ -1,7 +1,35 @@
 #!/usr/bin/env python3
-"""Mean-reverting feature and feature-dependent stock price. Requires NumPy."""
 
 import numpy as np
+import matplotlib
+matplotlib.use("WebAgg")  # Use a non-blocking backend for interactive plotting
+import matplotlib.pyplot as plt
+
+
+def latex_style(font_size=11, width=6, use_tex=True):
+    """Set plot defaults. Width is in inches; use_tex requires local LaTeX."""
+    plt.rcParams.update(
+        {
+            "text.usetex": use_tex,
+            "font.family": "serif",
+            "font.serif": ["Computer Modern Roman" if use_tex else "cmr10"],
+            "mathtext.fontset": "cm",
+            "axes.formatter.use_mathtext": True,
+            "font.size": font_size,
+            "axes.labelsize": font_size,
+            "axes.titlesize": font_size,
+            "xtick.labelsize": font_size - 1,
+            "ytick.labelsize": font_size - 1,
+            "legend.fontsize": font_size - 1,
+            "legend.frameon": False,
+            "lines.linewidth": 1.2,
+            "axes.linewidth": 0.8,
+            "figure.figsize": (width, width * 0.62),
+            "figure.constrained_layout.use": False,
+            "savefig.format": "pdf",
+            "savefig.dpi": 300,
+        }
+    )
 
 
 def ou_process(mean, variance, k, *, n_steps=1000, dt=1.0, x0=None, rng=None):
@@ -58,8 +86,9 @@ def signal_process(x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None):
         raise ValueError("Require a nonempty, finite 1D feature series.")
 
     drift = np.where(x[:-1] < d, -mu, mu)
-    noise = rng.normal(0, np.sqrt(variance * dt), size=len(x) - 1)
-    log_returns = (drift - 0.5 * variance) * dt + noise
+    sigma = np.where(x[:-1] < d, np.sqrt(variance), 0.5*np.sqrt(variance))
+    noise = rng.normal(0, np.sqrt(dt)*sigma, size=len(x) - 1)
+    log_returns = (drift - 0.5 * sigma**2) * dt + noise
     prices = np.empty(len(x))
     prices[0] = s0
     prices[1:] = s0 * np.exp(np.cumsum(log_returns))
@@ -67,12 +96,33 @@ def signal_process(x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None):
 
 
 if __name__ == "__main__":
+    latex_style(font_size=11, width=6)
     rng = np.random.default_rng(42)
     dt = 1.0
-    x = ou_process(mean=0.0, variance=1.0, k=0.2, n_steps=1000, dt=dt, rng=rng)
-    x_ma = moving_average(x, window=20)
-    prices = signal_process(x, mu=0.01, d=0.0, variance=0.0001, s0=100, dt=dt, rng=rng)
-    # To pair all three series, use x[19:], x_ma, and prices[19:].
-    print("Feature:", x[:5])
-    print("Moving average:", x_ma[:5])
-    print("Prices:", prices[:5])
+    s = -1.0
+    average = 20
+    x = ou_process(mean=0.0, variance=2.0, k=0.01, n_steps=1000, dt=dt, rng=rng)
+    x_ma = moving_average(x, window=average)
+    prices = signal_process(x, mu=1e-4, d=s, variance=0.0001, s0=100, dt=dt, rng=123)
+    prices_2 = signal_process(x_ma, mu=1e-4, d=s, variance=0.0001, s0=100, dt=dt, rng=123)
+    # To pair all three series, use x[average-1:], x_ma, and prices[average-1:].
+    time = np.arange(len(x)) * dt
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True, layout="none")
+    #fig.subplots_adjust(left=0.12, right=0.96, bottom=0.12, top=0.95, hspace=0.25)
+
+    axes[0].plot(time, x, label="OU feature")
+    axes[0].axhline(s, color="gray", linestyle="--", label="Threshold")
+    axes[0].plot(time[average-1:], x_ma, label="Moving average")
+    axes[0].set_ylabel("Feature Value")
+    axes[0].legend()
+
+    axes[1].plot(time, prices, label="Price with OU")
+    axes[1].plot(time[average-1:], prices_2, label="Price with Moving Average")
+    axes[1].set_ylabel("Price")
+    axes[1].set_xlabel("Time")
+    axes[1].legend()
+
+    # Save before opening the interactive window.
+    #fig.savefig("synthetic_data.png", dpi=150)
+    plt.show()

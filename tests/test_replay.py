@@ -106,6 +106,14 @@ class ReplayTest(unittest.TestCase):
         path = replay_path(optimizer, np.zeros((1, 2)), [[0.01, 0.02]], 0.01 * np.eye(2))
         self.assertTrue(np.isnan(path.sharpe))
 
+    def test_sharpe_is_zero_for_a_path_that_stays_in_cash(self):
+        optimizer = PortfolioOptimizer(2, PortfolioConfig(fee_rate=(0.001, 0.0)))
+        scores = np.tile([-0.5, 0.0], (4, 1))                  # asset looks bad: hold cash
+        returns = [[0.01, 0.0], [-0.02, 0.0], [0.03, 0.0], [0.0, 0.0]]
+        path = replay_path(optimizer, scores, returns, 0.01 * np.eye(2), initial_weights=[0.0, 1.0])
+        np.testing.assert_array_equal(path.net_returns, 0.0)
+        self.assertEqual(path.sharpe, 0.0)
+
     def test_invalid_inputs_are_rejected(self):
         optimizer = PortfolioOptimizer(2, PortfolioConfig())
         scores, covariance = np.zeros((3, 2)), 0.01 * np.eye(2)

@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Can the tree find a planted threshold? One risky asset and cash.
+"""Can the tree find a planted threshold? One risky asset and cash, on daily data.
 
 synthetic_data.py makes a mean-reverting feature x and a price whose drift is
--mu while x < d and +mu otherwise. Data come at every step; a decision is taken
-every `step` steps and held until the next one, the way main.py takes weekly
-decisions on daily data. The tree sees x together with decoys: a moving average
-of x, an unrelated mean-reverting feature and white noise. The second asset is
-cash: constant price, no fee.
+-mu while x < d and +mu otherwise. The clock is the trading day: x and the
+price are observed every day. A decision is taken every `step` days and held
+until the next one, the way main.py takes weekly decisions on daily data. The
+tree sees x alone; the second asset is cash (constant price, no fee).
 
-A decision is held for `step` steps while x keeps moving, so the tree should
-not find d itself but the value of x where the expected return over the holding
-period changes sign; expected_return_curve computes that benchmark.
+The threshold d sits at the long-run mean of x. The expected return over any
+holding period is then antisymmetric around d, so the value of x where a
+correct tree changes its decision is d itself, at every trading rate;
+expected_return_curve computes that expected return, whose size shows how much
+edge is left once the regime has had `step` days to change.
 
-Run:  python recovery_test.py        one case, printed in detail (a few seconds)
+The parameters are sized on daily markets: a volatility of 1% a day (16% a
+year), a drift of a few basis points a day (edge = drift / volatility), a
+feature that mean-reverts over weeks, 15 years of training data and a fee of
+3 basis points per trade.
+
+Run:  python recovery_test.py        one case, printed in detail
 """
 
 from __future__ import annotations
@@ -20,75 +26,103 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import numpy as np
 
-from main import (PortfolioConfig, PortfolioOptimizer, SPOPortfolioTree, TreeConfig,
-                  replay_constant_weights, replay_path)
-from synthetic_data import moving_average, ou_process, signal_process
+from main import (
+    PortfolioConfig,
+    PortfolioOptimizer,
+    SPOPortfolioTree,
+    TreeConfig,
+    replay_constant_weights,
+    replay_path,
+)
+from synthetic_data import ou_process, signal_process
 
-FEATURES = ["x", "x_ma", "decoy_ou", "decoy_noise"]
+FEATURES = ["x"]
+DAYS_PER_YEAR = 252
 
 
 @dataclass(frozen=True)
 class Case:
-    """One synthetic setting. A step is the time unit of the data."""
-    k: float = 0.2                  # reversion speed of x, per step
-    feature_variance: float = 4.0   # long-run variance of x
-    mu: float = 0.03                # drift per step: -mu while x < d, +mu otherwise
-    price_variance: float = 0.001   # return variance per step
-    d: float = 0.0                  # the planted threshold
-    mean: float = 1.0               # long-run mean of x
-    step: int = 10                  # steps between two decisions
-    window: int = 180               # steps of past returns behind each covariance
-    ma_window: int = 20             # steps in the moving average of x
-    n_train: int = 443              # decisions used for training (fitting + checking)
-    n_test: int = 1000              # decisions kept for the test
+    """One synthetic setting. The time unit is one trading day."""
+
+    k: float = 0.02  # reversion speed of x per day: a half-life of 35 days
+    feature_variance: float = 1.0  # long-run variance of x (a standardized feature)
+    mean: float = 0.0  # long-run mean of x
+    d: float = 0.0  # the planted threshold on x, at its long-run mean
+    volatility: float = 0.01  # price volatility per day: 16% a year
+    edge: float = 0.10  # drift / volatility per day: mu = edge * volatility
+    step: int = 5  # days between two decisions: the trading rate
+    window: int = 180  # days of past returns behind each covariance
+    train_days: int = 15 * DAYS_PER_YEAR  # days of training data (fitting + checking)
+    test_days: int = 5 * DAYS_PER_YEAR  # days kept for the test
     ridge: float = 1e-6
+
+    @property
+    def mu(self):
+        """Drift per day: -mu while x < d, +mu otherwise."""
+        return self.edge * self.volatility
+
+    @property
+    def price_variance(self):
+        return self.volatility**2
+
+    @property
+    def n_train(self):
+        """Decisions used for training (fitting + checking)."""
+        return self.train_days // self.step
+
+    @property
+    def n_test(self):
+        """Decisions kept for the test."""
+        return self.test_days // self.step
+
+    @property
+    def decisions_per_year(self):
+        return DAYS_PER_YEAR / self.step
 
 
 @dataclass(frozen=True)
 class Rows:
     """One row per decision: asset 0 is the risky asset, asset 1 is cash."""
-    steps: np.ndarray    # (T,) the step of each decision
-    X: np.ndarray        # (T, 4) FEATURES read at the decision step
-    R: np.ndarray        # (T, 2) simple return from this decision to the next
-    Sigma: np.ndarray    # (T, 2, 2) covariance of that return, from past steps only
+
+    days: np.ndarray  # (T,) the day of each decision
+    X: np.ndarray  # (T, 1) x read on the decision day
+    R: np.ndarray  # (T, 2) simple return from this decision to the next
+    Sigma: np.ndarray  # (T, 2, 2) covariance of that return, from past days only
 
 
 def simulate(case, seed):
-    """x, the unrelated decoy, white noise and the price, one value per step."""
+    """x and the price, one value per day."""
     rng = np.random.default_rng(seed)
-    n_steps = case.window + case.step * (case.n_train + case.n_test)
-    x = ou_process(case.mean, case.feature_variance, case.k, n_steps=n_steps, rng=rng)
-    decoy = ou_process(case.mean, case.feature_variance, case.k, n_steps=n_steps, rng=rng)
-    noise = rng.normal(size=n_steps + 1)
+    n_days = case.window + case.step * (case.n_train + case.n_test)
+    x = ou_process(case.mean, case.feature_variance, case.k, n_steps=n_days, rng=rng)
     prices = signal_process(x, case.mu, case.d, case.price_variance, rng=rng)
-    return x, decoy, noise, prices
+    return x, prices
 
 
-def decision_rows(x, decoy, noise, prices, case):
-    """Rows for a decision every case.step steps, after case.window steps of history.
+def decision_rows(x, prices, case):
+    """Rows for a decision every case.step days, after case.window days of history.
 
-    At a decision step t:
-      X[t]     = x[t], the mean of the last ma_window values of x, decoy[t], noise[t]
+    On a decision day t:
+      X[t]     = x[t]
       R[t]     = prices[t + step] / prices[t] - 1 for the asset, 0 for cash
-      Sigma[t] = step * variance of the last `window` one-step returns up to t
-                 (steps treated as independent), plus the ridge on both assets
+      Sigma[t] = step * variance of the last `window` daily returns up to t
+                 (days treated as independent), plus the ridge on both assets
     """
     t = np.arange(case.window, len(prices) - case.step, case.step)
-    smooth = moving_average(x, case.ma_window)            # aligned with x[ma_window - 1:]
-    X = np.column_stack([x[t], smooth[t - case.ma_window + 1], decoy[t], noise[t]])
+    X = x[t, None]
     R = np.column_stack([prices[t + case.step] / prices[t] - 1, np.zeros(len(t))])
-    one_step = prices[1:] / prices[:-1] - 1               # one_step[s - 1] ends at step s
+    daily = prices[1:] / prices[:-1] - 1  # daily[s - 1] ends on day s
     Sigma = np.zeros((len(t), 2, 2))
     for row, now in enumerate(t):
-        Sigma[row, 0, 0] = case.step * one_step[now - case.window:now].var(ddof=1)
+        Sigma[row, 0, 0] = case.step * daily[now - case.window : now].var(ddof=1)
     Sigma += case.ridge * np.eye(2)
     return Rows(t, X, R, Sigma)
 
 
 def expected_return_curve(case, grid, n_paths=20000, seed=0):
-    """E[return of the asset over the next case.step steps | x = grid value now].
+    """E[return of the asset over the next case.step days | x = grid value now].
 
-    Monte Carlo on the exact transition of x. With S the number of steps spent at
+    Monte Carlo on the exact transition of x. With S the number of days spent at
     or above d minus the number spent below, the expected simple return is
     E[exp(mu * S)] - 1: the price noise has mean zero and drops out.
     """
@@ -109,15 +143,25 @@ def sign_change(grid, curve):
     if len(crossing) == 0:
         return None
     i = crossing[0]
-    return float(grid[i] - curve[i] * (grid[i + 1] - grid[i]) / (curve[i + 1] - curve[i]))
+    return float(
+        grid[i] - curve[i] * (grid[i + 1] - grid[i]) / (curve[i + 1] - curve[i])
+    )
 
 
 def splits_of(node, depth=0):
     """(depth, feature name, threshold) of every split left in the tree."""
     if node.feature is None:
         return []
-    return ([(depth, FEATURES[node.feature], node.threshold)]
-            + splits_of(node.left, depth + 1) + splits_of(node.right, depth + 1))
+    return (
+        [(depth, FEATURES[node.feature], node.threshold)]
+        + splits_of(node.left, depth + 1)
+        + splits_of(node.right, depth + 1)
+    )
+
+
+def annual(path, case):
+    """Annualized figures of a path of decisions held case.step days each."""
+    return path.summary(periods_per_year=case.decisions_per_year)
 
 
 def run_case(case, seed, verbose=False, curve=None):
@@ -130,35 +174,54 @@ def run_case(case, seed, verbose=False, curve=None):
     rows = decision_rows(*series, case)
     X, R, S = rows.X, rows.R, rows.Sigma
     train, test = slice(0, case.n_train), slice(case.n_train, None)
-    optimizer = PortfolioOptimizer(2, PortfolioConfig(
-        max_weight=1.0, fee_rate=(0.0003, 0.0), risk_aversion=1.0))
-    config = TreeConfig(max_depth=2, min_samples_leaf=20, max_thresholds=None,
-                        validation_fraction=0.25, verbose=verbose)
+    optimizer = PortfolioOptimizer(
+        2, PortfolioConfig(max_weight=1.0, fee_rate=(0.0003, 0.0), risk_aversion=1.0)
+    )
+    config = TreeConfig(
+        max_depth=2,
+        min_samples_leaf=20,
+        max_thresholds=None,
+        validation_fraction=0.25,
+        verbose=verbose,
+    )
     tree = SPOPortfolioTree(optimizer, config).fit(X[train], R[train], S[train])
     flat = SPOPortfolioTree(optimizer, replace(config, max_depth=0, verbose=False))
     flat.fit(X[train], R[train], S[train])
 
-    # The rule at d: the asset while x >= d, cash otherwise (right for one-step decisions).
+    # The rule at d: the asset while x >= d, cash otherwise.
     bound = config.prediction_bound
-    at_d = np.column_stack([np.where(X[:, 0] >= case.d, bound, -bound), np.zeros(len(X))])
+    at_d = np.column_stack(
+        [np.where(X[:, 0] >= case.d, bound, -bound), np.zeros(len(X))]
+    )
     strategies = {
         "tree": lambda part, start: tree.replay(X[part], R[part], S[part], start),
-        "tree without splits": lambda part, start: flat.replay(X[part], R[part], S[part], start),
-        "rule at d": lambda part, start: replay_path(optimizer, at_d[part], R[part],
-                                                     S[part], start),
+        "tree without splits": lambda part, start: flat.replay(
+            X[part], R[part], S[part], start
+        ),
+        "rule at d": lambda part, start: replay_path(
+            optimizer, at_d[part], R[part], S[part], start
+        ),
         "always the asset": lambda part, start: replay_constant_weights(
-            optimizer, np.array([1.0, 0.0]), R[part], S[part], start),
+            optimizer, np.array([1.0, 0.0]), R[part], S[part], start
+        ),
     }
     if curve is not None:
         ideal = np.column_stack([np.interp(X[:, 0], *curve), np.zeros(len(X))])
         strategies["ideal rule"] = lambda part, start: replay_path(
-            optimizer, ideal[part], R[part], S[part], start)
+            optimizer, ideal[part], R[part], S[part], start
+        )
     paths = {}
     for name, run in strategies.items():
         paths[name] = run(test, run(train, None).final_holdings)
     return {
-        "case": case, "seed": seed, "tree": tree, "flat": flat, "paths": paths,
-        "series": series, "rows": rows, "optimizer": optimizer,
+        "case": case,
+        "seed": seed,
+        "tree": tree,
+        "flat": flat,
+        "paths": paths,
+        "series": series,
+        "rows": rows,
+        "optimizer": optimizer,
         "grown": [(g.depth, FEATURES[g.feature], g.threshold) for g in tree.growth_log],
         "kept": splits_of(tree.root),
         "feature_std": float(np.sqrt(case.feature_variance)),
@@ -167,26 +230,43 @@ def run_case(case, seed, verbose=False, curve=None):
 
 def describe(result):
     case, tree = result["case"], result["tree"]
-    print(f"\nplanted: drift -{case.mu:g} per step while x < {case.d:g}, +{case.mu:g} otherwise; "
-          f"price volatility {np.sqrt(case.price_variance):.2%} per step; k = {case.k:g}; "
-          f"one decision every {case.step} steps")
-    print(f"training decisions: {case.n_train}; test decisions: {case.n_test}\n")
+    print(
+        f"\nplanted: drift {case.mu:.2%} a day ({case.mu * DAYS_PER_YEAR:+.0%} a year) while "
+        f"x >= {case.d:g}, the opposite below; volatility {case.volatility:.1%} a day "
+        f"({case.volatility * np.sqrt(DAYS_PER_YEAR):.0%} a year); edge {case.edge:g}; "
+        f"x has mean {case.mean:g}, variance {case.feature_variance:g}, k = {case.k:g} a day "
+        f"(half-life {np.log(2) / case.k:.0f} days); one decision every {case.step} days"
+    )
+    print(
+        f"training decisions: {case.n_train} ({case.train_days / DAYS_PER_YEAR:g} years); "
+        f"test decisions: {case.n_test} ({case.test_days / DAYS_PER_YEAR:g} years)\n"
+    )
     tree.describe(FEATURES)
     print("\nsplits grown :", [(d, f, round(th, 4)) for d, f, th in result["grown"]])
     print("splits kept  :", [(d, f, round(th, 4)) for d, f, th in result["kept"]])
-    print(f"thresholds kept on x: {[round(th, 4) for _, f, th in result['kept'] if f == 'x']}; "
-          f"planted d = {case.d:g}; the expected {case.step}-step return changes sign at "
-          f"x = {result['sign_change']:+.3f}")
-    print(f"\ntest, per decision ({case.step} steps){'':8}mean return   volatility   Sharpe   turnover")
+    print(
+        f"thresholds kept on x: {[round(th, 4) for _, f, th in result['kept'] if f == 'x']}; "
+        f"planted d = {case.d:g}; the expected {case.step}-day return changes sign at "
+        f"x = {result['sign_change']:+.3f}"
+    )
+    print(
+        f"\ntest, annualized{'':16}return   volatility   Sharpe   turnover per decision"
+    )
     for name, path in result["paths"].items():
-        print(f"  {name:24s}{path.net_returns.mean():>12.3%}{path.net_returns.std(ddof=1):>13.3%}"
-              f"{path.sharpe:>9.3f}{path.turnover.mean():>11.2f}")
+        figures = annual(path, case)
+        print(
+            f"  {name:24s}{figures['return']:>8.1%}{figures['volatility']:>13.1%}"
+            f"{figures['sharpe']:>9.2f}{figures['turnover']:>11.2f}"
+        )
 
 
 if __name__ == "__main__":
     case = Case()
-    grid = np.linspace(case.mean - 4 * np.sqrt(case.feature_variance),
-                       case.mean + 4 * np.sqrt(case.feature_variance), 321)
+    grid = np.linspace(
+        case.mean - 4 * np.sqrt(case.feature_variance),
+        case.mean + 4 * np.sqrt(case.feature_variance),
+        321,
+    )
     curve = expected_return_curve(case, grid)
     result = run_case(case, seed=42, verbose=True, curve=(grid, curve))
     result["sign_change"] = sign_change(grid, curve)

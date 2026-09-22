@@ -31,19 +31,19 @@ rows = weekly_rows(dates, closes, daily_features, weekday=0, window=180)
 portfolio = PortfolioOptimizer(
     n_assets=rows.R.shape[1],
     config=PortfolioConfig(
-        max_weight=1.0,       # Long-only, fully invested; cap per asset
-        fee_rate=0.0003,      # 3 bp per side, all-in: exchange fee + spread + slippage
-        risk_aversion=1.0,    # Must be > 0; select using historical validation
+        max_weight=1.0,  # Long-only, fully invested; cap per asset
+        fee_rate=0.0003,  # 3 bp per side, all-in: exchange fee + spread + slippage
+        risk_aversion=1.0,  # Must be > 0; select using historical validation
     ),
 )
 
 config = TreeConfig(
     max_depth=2,
     min_samples_leaf=20,
-    max_thresholds=None,         # Every threshold; affordable with screening
+    max_thresholds=None,  # Every threshold; affordable with screening
     min_sharpe_improvement=0.0,  # Hurdle for accepting a split (see the discussion on noise)
-    validation_fraction=0.25,    # Last quarter of the training weeks only prunes the tree
-    prediction_bound=0.10,       # Leaf scores bounded to ±10%
+    validation_fraction=0.25,  # Last quarter of the training weeks only prunes the tree
+    prediction_bound=0.10,  # Leaf scores bounded to ±10%
     search_passes=3,
     search_grid_size=7,
     verbose=True,
@@ -62,5 +62,7 @@ print(performance_report(test_paths))
 # Live decision at the latest close (run on the decision weekday).
 X_live = np.asarray(daily_features, dtype=float)[-1:]
 Sigma_live = weekly_covariance(closes, len(closes) - 1, window=180)
-target_weights = tree.predict_weights(X_live, np.asarray(current_weights)[None, :], Sigma_live)
+target_weights = tree.predict_weights(
+    X_live, np.asarray(current_weights)[None, :], Sigma_live
+)
 print("Target weights:", target_weights[0])
