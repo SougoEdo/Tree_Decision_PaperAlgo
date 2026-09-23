@@ -675,8 +675,9 @@ def figure_settings_maps(results, plt, names, edge=0.10, title="The settings exp
             captured[i, j], leaves[i, j] = s["captured"], s["leaves"]
             tree[i, j], ideal[i, j] = s["sharpe"]["tree"], s["sharpe"]["ideal rule"]
             turnover[i, j], turn_ideal[i, j] = s["turnover"]["tree"], s["turnover"]["ideal rule"]
-    labels = [n.replace("volatility threshold", "vol. threshold").replace("constant volatility", "constant vol.")
-              .replace(", ", "\n").replace(" + ", "\n+ ") for n in names]
+    import textwrap
+    labels = ["\n".join(textwrap.wrap(n.replace("volatility", "vol.").replace("refinement", "refin.")
+                                      .replace("smoothing", "smooth."), 14)) for n in names]
     fig, axes = plt.subplots(2, 2, figsize=(12, 9.5))
     axes = axes.ravel()
     heatmap(axes[0], captured, "test gain over the tree without splits,\nas % of the ideal rule's gain",

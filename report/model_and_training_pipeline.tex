@@ -134,7 +134,7 @@ At a node with rows $I$ and weights $\omega$ (mass $N=\sum\omega$), the minimum 
 \textbf{The screen.} Each candidate $\theta$ is scored cheaply: each child gets its clipped $\omega$-weighted mean return as scores, and
 \begin{equation}\label{eq:screen}
 Q(\theta)=\sum_{t\in I}\omega_t\,\Reg_t\big(c_{\mathrm{side}(t)}(\theta)\big),\qquad
-c_{\mathrm{left}}(\theta)=\mathrm{clip}\Big(\tfrac{\sum_{x_{tj}\le\theta}\omega_tr_t}{\sum_{x_{tj}\le\theta}\omega_t},\pm b\Big),
+c_{\mathrm{left}}(\theta)=\mathrm{clip}\left(\tfrac{\sum_{x_{tj}\le\theta}\omega_tr_t}{\sum_{x_{tj}\le\theta}\omega_t},\pm b\right),
 \end{equation}
 and likewise on the right. The standard error of a difference of two such sums is $\mathrm{se}=\sqrt{|I|}\,\mathrm{std}_t\big(\delta_t\big)$ with $\delta_t$ the per-row difference of the two regrets (rows treated as independent).
 

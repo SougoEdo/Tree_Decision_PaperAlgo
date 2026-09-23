@@ -620,9 +620,62 @@ noise $\tau$, monthly & 0 & 0.10 & 80 & 20 & $0.23\ [0.09, 0.31]$ & 0.51 & 0.66 
 \label{fig:options2-thresholds}
 \end{figure}
 
-%% OPTIONS2-RESULTS-START
-(filled from the run)
-%% OPTIONS2-RESULTS-END
+\begin{table}[H]
+\centering\scriptsize
+\setlength{\tabcolsep}{2.6pt}
+\begin{tabular}{@{}l r rr r r r rr r r@{}}
+\toprule
+& & \multicolumn{2}{c}{datasets (\%)} & threshold & & 2nd & \multicolumn{2}{c}{annual.\ Sharpe} & gain & turn-\\
+\cmidrule(lr){3-4}\cmidrule(lr){8-9}
+setting & $h$ & on $x$ & none & $|\cdot|\le0.25$ & spread & level & tree & ideal & captured & over\\
+\midrule
+base & 2 & 98 & 2 & 97\% & -- & 25 & 0.87 & 1.00 & 82\% & 0.15\\
+ & 5 & 92 & 8 & 84\% & -- & 10 & 0.80 & 0.91 & 83\% & 0.25\\
+ & 10 & 88 & 12 & 63\% & -- & 5 & 0.69 & 0.84 & 77\% & 0.32\\
+ & 21 & 72 & 28 & 45\% & -- & 5 & 0.57 & 0.74 & 71\% & 0.36\\
+\midrule
+smoothing $\kappa=0.5$ & 2 & 80 & 20 & 78\% & 0.37 & 30 & 0.31 & 1.00 & 25\% & 0.04\\
+ & 5 & 85 & 15 & 71\% & 0.40 & 18 & 0.60 & 0.91 & 63\% & 0.17\\
+ & 10 & 85 & 15 & 62\% & 0.45 & 15 & 0.69 & 0.84 & 75\% & 0.27\\
+ & 21 & 78 & 22 & 74\% & 0.52 & 8 & 0.56 & 0.74 & 65\% & 0.36\\
+\midrule
+smoothing $\kappa=0.25$ & 2 & 82 & 18 & 85\% & 0.17 & 22 & 0.61 & 1.00 & 58\% & 0.10\\
+ & 5 & 88 & 12 & 86\% & 0.24 & 10 & 0.73 & 0.91 & 77\% & 0.20\\
+ & 10 & 88 & 12 & 60\% & 0.23 & 5 & 0.72 & 0.84 & 77\% & 0.31\\
+ & 21 & 78 & 22 & 71\% & 0.37 & 0 & 0.59 & 0.74 & 72\% & 0.38\\
+\midrule
+Gaussian smoothing $\kappa=1$ & 2 & 78 & 22 & 68\% & 0.47 & 28 & 0.36 & 1.00 & 31\% & 0.04\\
+ & 5 & 88 & 12 & 66\% & 0.52 & 25 & 0.64 & 0.91 & 66\% & 0.15\\
+ & 10 & 85 & 15 & 65\% & 0.60 & 30 & 0.68 & 0.84 & 75\% & 0.28\\
+ & 21 & 70 & 30 & 75\% & 0.66 & 8 & 0.50 & 0.74 & 53\% & 0.35\\
+\midrule
+hurdle 2 s.e.\ below the root & 2 & 92 & 8 & 97\% & -- & 5 & 0.74 & 1.00 & 68\% & 0.14\\
+ & 5 & 90 & 10 & 86\% & -- & 0 & 0.77 & 0.91 & 80\% & 0.24\\
+ & 10 & 88 & 12 & 63\% & -- & 0 & 0.68 & 0.84 & 76\% & 0.32\\
+ & 21 & 72 & 28 & 45\% & -- & 0 & 0.57 & 0.74 & 71\% & 0.35\\
+\midrule
+deciles + refinement + smoothing $\kappa=0.25$ & 2 & 88 & 12 & 91\% & 0.10 & 10 & 0.72 & 1.00 & 67\% & 0.12\\
+ & 5 & 92 & 8 & 86\% & 0.09 & 5 & 0.82 & 0.91 & 85\% & 0.24\\
+ & 10 & 90 & 10 & 67\% & 0.08 & 5 & 0.71 & 0.84 & 79\% & 0.33\\
+ & 21 & 72 & 28 & 59\% & 0.14 & 5 & 0.55 & 0.74 & 67\% & 0.36\\
+\midrule
+deciles + refinement + hurdle below the root & 2 & 95 & 5 & 87\% & -- & 2 & 0.79 & 1.00 & 72\% & 0.14\\
+ & 5 & 90 & 10 & 89\% & -- & 0 & 0.80 & 0.91 & 84\% & 0.24\\
+ & 10 & 88 & 12 & 71\% & -- & 0 & 0.69 & 0.84 & 79\% & 0.33\\
+ & 21 & 72 & 28 & 55\% & -- & 0 & 0.54 & 0.74 & 70\% & 0.37\\
+\bottomrule
+\end{tabular}
+\caption{Edge 0.10, 40 datasets per row ($h$: days between decisions). ``2nd level'': datasets that keep a second-level split; ``spread'': mean spread of the root split (soft splits); turnover per decision (the ideal rule's is 0.17, 0.28, 0.40 and 0.54). At edge 0.05 every smoothing setting loses most of the gain (Sharpe 0.06--0.20 against 0.19--0.27 for the base), the hurdle below the root equals the base (0.21, 0.27, 0.19, 0.26) with 2--5\% of second-level splits instead of 15--30\%, and deciles with refinement and the hurdle are within noise of the base.}
+\label{tab:options2}
+\end{table}
+
+\textbf{Reading the figures and the table.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{Sharper weights cure the no-trade problem, not the loss.} At $\kappa=0.25$ the spread of the root split falls from 0.65 (Section~\ref{sec:enhancements}) to 0.17--0.37 and the turnover returns to the base level, so the score no longer sits in the optimizer's no-trade band. The tree then matches the base at weekly decisions and slower (0.73, 0.72, 0.59 against 0.80, 0.69, 0.57) with thresholds centred at least as well, but still loses 0.26 of Sharpe at every 2 days. $\kappa=0.5$ and the Gaussian form at $\kappa=1$ remain too wide (spreads 0.4--0.7) and behave like the $\kappa=1$ of Section~\ref{sec:enhancements}.
+\item \textbf{On top of deciles with refinement, $\kappa=0.25$ gives the narrowest transition of all} (spread 0.08--0.14) and the best weekly numbers of the whole series, Sharpe 0.82 and 85\% of the gain, within noise of the base (0.80, 83\%); at every 2 days the soft edge still costs (0.72 against 0.87).
+\item \textbf{The hurdle below the root does what the global hurdle could not.} Second-level splits fall from 25, 10, 5 and 5\% of the datasets to 5, 0, 0 and 0\%, the root splits are untouched (92, 90, 88, 72\% found against 98, 92, 88, 72), and from weekly decisions on the Sharpe ratio is unchanged (0.77, 0.68, 0.57 against 0.80, 0.69, 0.57). At edge 0.05 it also removes the second-level splits at no cost. At every 2 days it costs 0.13 of Sharpe: with 1{,}400 fitting decisions some second-level splits are real refinements, and the hurdle removes them with the noise.
+\item \textbf{None of the options raises the Sharpe ratio above the base} beyond the noise of 40 datasets (standard error about 0.04). What they buy is steadier and better-centred thresholds at the slow rates and trees without spurious leaves. As defaults: the hurdle below the root from weekly decisions on, deciles with refinement for slow rates, and no smoothing unless positions are meant to be interior ($\lambda\ge5$).
+\end{itemize}
 
 \section{How to reproduce}
 The code is in \code{code/} (run the commands below from that folder, with the project's Python, \code{../.venv/bin/python}); results and figures are in \code{report/figures/}. The results were produced with \code{synthetic_market.py} as committed in \code{eae145c} (one volatility for both regimes).
