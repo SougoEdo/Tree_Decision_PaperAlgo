@@ -1,2 +1,8 @@
-__pycache__
-tests/__pycache__
+__pycache__/
+.venv/
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.out
+*.synctex.gz
