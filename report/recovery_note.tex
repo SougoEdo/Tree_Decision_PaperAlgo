@@ -276,12 +276,100 @@ data & 443 training decisions (332 grow, 111 prune), 300 test & 100 datasets per
 \item \textbf{Not shown:} decoys at these edges, an unconditional premium of the asset, several assets, a regime depending on more than one threshold, volatility that changes with the regime.
 \end{itemize}
 
+
+\section{A second experiment: risk aversion, fees, depth and quantile thresholds}\label{sec:settings}
+\textbf{Why.} The positions of Section~\ref{sec:results} are 0 or 1. With the fee $f$ on the asset and holdings $u$, the optimizer \eqref{eq:opt} gives
+\begin{equation}\label{eq:w}
+w=\frac{\hat c\mp f}{2\lambda\sigma_h^2}\quad\text{clipped to }[0,1],\qquad\text{and } w=u \text{ inside the no-trade zone } |\hat c-2\lambda\sigma_h^2u|\le f,
+\end{equation}
+so a position is interior only for scores within a window of width $2\lambda\sigma_h^2$: 0.1\% at weekly decisions with $\lambda=1$, against expected returns of $\pm0.5\%$. The ideal position is then a step, and a step is what the tree learns. To see whether the tree can learn a \emph{gradual} position, and how fees, depth and the number of candidate thresholds change the picture, the same world was run again with one or two things changed at a time (Table~\ref{tab:settings-def}): 40 datasets per cell, edges 0.05 and 0.10, $k=0.02$, decisions every 2, 5, 10 and 21 days (daily decisions were left out: two thirds of the compute for the same result as every 2 days in Section~\ref{sec:results}). One measurement is new: the mean weight taken on the test decisions, by bin of $x$ (Figure~\ref{fig:positions}).
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}l L@{}}
+\toprule
+Setting & What changes with respect to the run of Section~\ref{sec:results} (\code{base})\\
+\midrule
+depth 3 & up to 8 leaves instead of 4\\
+$\lambda=5$, depth 3 & risk aversion 5: the window of \eqref{eq:w} is 0.5\% wide at weekly decisions\\
+$\lambda=10$, depth 3 & risk aversion 10: window 1\% wide; the ideal position never exceeds one half\\
+fee 10 bp & fee 10 basis points per trade instead of 3\\
+quartiles, depth 3 & only three candidate thresholds per split, the quartiles of the node's values (\code{threshold_quantiles=(0.25,0.5,0.75)}); every leaf then holds at least a quarter of its parent\\
+\bottomrule
+\end{tabularx}
+\caption{The settings experiment. The settings are fields of \code{Case} (\code{risk_aversion}, \code{fee}, \code{max_depth}, \code{threshold_quantiles}); their defaults reproduce Section~\ref{sec:results}.}
+\label{tab:settings-def}
+\end{table}
+
+\begin{figure}[H]
+\centering\includegraphics[width=0.88\linewidth]{recovery_settings_positions}
+\caption{Weekly decisions: the weight of the asset taken on the test decisions, by $x$ on the decision day. Orange: the tree (median over the 40 datasets, and the quartiles as a band); dashed blue: the ideal rule, the optimizer fed with the true $g_5(x)$. One row per setting; \emph{left:} edge 0.05, \emph{right:} edge 0.10. Panel titles: mean number of leaves, annualized test Sharpe ratio of the tree (ideal rule in brackets).}
+\label{fig:positions}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.95\linewidth]{recovery_settings_maps}
+\caption{Edge 0.10, rows: trading rate, columns: setting. Share of the ideal rule's test gain captured; annualized test Sharpe ratio (ideal rule in brackets); mean number of leaves kept; turnover per decision (ideal rule in brackets).}
+\label{fig:settings-maps}
+\end{figure}
+
+\begin{table}[H]
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}l r r rr r rr r rr@{}}
+\toprule
+& & & \multicolumn{2}{c}{splits (\%)} & threshold & \multicolumn{2}{c}{annual.\ Sharpe} & gain & \multicolumn{2}{c}{turnover}\\
+\cmidrule(lr){4-5}\cmidrule(lr){7-8}\cmidrule(lr){10-11}
+setting & $h$ & leaves & on $x$ & none & median & tree & ideal & captured & tree & ideal\\
+\midrule
+base & 2 & 2.2 & 98 & 2 & $+0.03$ & 0.88 & 1.00 & 83\% & 0.16 & 0.17\\
+ & 5 & 2.0 & 92 & 8 & $+0.08$ & 0.80 & 0.91 & 83\% & 0.25 & 0.28\\
+ & 10 & 1.9 & 88 & 12 & $+0.05$ & 0.69 & 0.84 & 77\% & 0.32 & 0.40\\
+ & 21 & 1.8 & 72 & 28 & $+0.09$ & 0.57 & 0.74 & 71\% & 0.35 & 0.54\\
+\midrule
+depth 3 & 2 & 2.4 & 98 & 2 & $+0.03$ & 0.89 & 1.00 & 84\% & 0.16 & 0.17\\
+ & 5 & 2.1 & 92 & 8 & $+0.08$ & 0.80 & 0.91 & 83\% & 0.25 & 0.28\\
+ & 10 & 2.0 & 88 & 12 & $+0.05$ & 0.68 & 0.84 & 75\% & 0.33 & 0.40\\
+ & 21 & 1.8 & 72 & 28 & $+0.09$ & 0.56 & 0.74 & 70\% & 0.35 & 0.54\\
+\midrule
+$\lambda=5$, depth 3 & 2 & 2.8 & 88 & 12 & $+0.12$ & 0.81 & 1.00 & 78\% & 0.16 & 0.13\\
+ & 5 & 2.7 & 82 & 18 & $+0.23$ & 0.70 & 0.93 & 72\% & 0.25 & 0.23\\
+ & 10 & 2.6 & 80 & 20 & $+0.26$ & 0.65 & 0.86 & 72\% & 0.28 & 0.34\\
+ & 21 & 1.9 & 68 & 32 & $+0.43$ & 0.48 & 0.77 & 58\% & 0.28 & 0.44\\
+\midrule
+$\lambda=10$, depth 3 & 2 & 2.9 & 85 & 15 & $+0.18$ & 0.71 & 1.00 & 80\% & 0.10 & 0.07\\
+ & 5 & 2.3 & 75 & 25 & $+0.25$ & 0.65 & 0.92 & 73\% & 0.13 & 0.12\\
+ & 10 & 2.3 & 78 & 22 & $+0.28$ & 0.59 & 0.86 & 74\% & 0.16 & 0.18\\
+ & 21 & 1.9 & 70 & 30 & $+0.44$ & 0.45 & 0.77 & 63\% & 0.17 & 0.22\\
+\midrule
+fee 10 bp & 2 & 2.4 & 95 & 5 & $+0.06$ & 0.53 & 0.94 & 51\% & 0.09 & 0.15\\
+ & 5 & 2.0 & 85 & 15 & $+0.08$ & 0.60 & 0.88 & 66\% & 0.18 & 0.26\\
+ & 10 & 2.0 & 85 & 15 & $+0.09$ & 0.61 & 0.81 & 70\% & 0.29 & 0.39\\
+ & 21 & 1.8 & 68 & 32 & $+0.09$ & 0.52 & 0.72 & 59\% & 0.33 & 0.52\\
+\midrule
+quartiles, depth 3 & 2 & 2.3 & 92 & 8 & $+0.06$ & 0.64 & 1.00 & 62\% & 0.12 & 0.17\\
+ & 5 & 2.5 & 85 & 15 & $+0.09$ & 0.71 & 0.91 & 72\% & 0.22 & 0.28\\
+ & 10 & 2.4 & 92 & 8 & $+0.09$ & 0.71 & 0.84 & 77\% & 0.33 & 0.40\\
+ & 21 & 2.1 & 80 & 20 & $+0.06$ & 0.56 & 0.74 & 73\% & 0.41 & 0.54\\
+\bottomrule
+\end{tabular}
+\caption{The settings experiment at edge 0.10, 40 datasets per row ($h$: days between decisions). ``Leaves'': mean number of leaves kept; ``median'': first threshold on $x$ over the datasets that split. At edge 0.05 no setting beats the base: the tree's Sharpe ratio is 0.19--0.27 for the base and 0.12--0.19 with $\lambda=5$ or 10, and with a 10 bp fee the tree hardly trades at the fast rates (0.08--0.09).}
+\label{tab:settings}
+\end{table}
+
+\textbf{Reading the figures and the table.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{Depth alone changes nothing}: same leaves, same thresholds, same Sharpe ratios as the base to the second decimal. With $\lambda=1$ the ideal position is a step and the tree has no reason to use more leaves.
+\item \textbf{With $\lambda=5$ or 10 the ideal position is a ramp} (to a plateau of one half at $\lambda=10$) \textbf{and the tree follows it}, with 2.3 to 2.9 leaves: it does learn a gradual position when the decision problem asks for one (Figure~\ref{fig:positions}, bottom row). The price is estimation: 72 to 80\% of the gain captured against 83\%, a Sharpe ratio 0.1 to 0.15 lower, thresholds that move up ($+0.12$ to $+0.44$) and more datasets without a split. The ideal rule itself gains nothing from sizing at these signal sizes (its Sharpe ratio is the same at $\lambda=1$, 5 and 10), so a bang-bang position is not a limitation of the tree here; it is what the problem asks for.
+\item \textbf{A higher fee does not make positions gradual}: they stay at 0 or 1 with a wider no-trade zone, as \eqref{eq:w} says. Turnover falls (0.09 to 0.33 per decision) and so does everything else: Sharpe 0.52--0.61 against 0.57--0.88 for the base, and at edge 0.05 the tree stops trading at the fast rates.
+\item \textbf{Quartile candidates trade precision for stability.} At the fast rates the threshold is less precise (62\% of the gain captured at every 2 days, against 83\%): the candidates are quantiles of a persistent feature, and over the 11 fitting years the sample median of $x$ is itself off by about $\pm0.2$ (autocorrelation time $1/k=50$ days), whereas the full search reads the threshold off the returns. At the slow rates, where the data cannot do better anyway, the coarse grid costs nothing (73\% against 71\% monthly) and its protection against small leaves shows: 20\% of the monthly trees keep no split against 28\%, and the thresholds' medians are the closest to $d$ of all settings ($+0.06$ to $+0.09$).
+\end{itemize}
+
 \section{How to reproduce}
 Code and results are in \code{PaperAlgo}; the results were produced with \code{synthetic_data.py} as committed in \code{eae145c} (one volatility for both regimes).
 \begin{itemize}\setlength{\itemsep}{1pt}
 \item \code{python recovery_test.py}: one dataset, printed in detail (about 10 s).
 \item \code{python recovery_figures.py run}: the 2{,}000 fits in parallel, 103 minutes on 10 cores; writes \code{report/figures/recovery_results.json}.
 \item \code{python recovery_figures.py plot}: the figures and the summary table of Tables~\ref{tab:edge}--\ref{tab:k}.
-\item \code{python -m unittest discover -s tests}: 52 tests, including the alignment and no-look-ahead checks of the rows and the Sharpe-of-cash convention.
+\item \code{python -m unittest discover -s tests}: 53 tests, including the alignment and no-look-ahead checks of the rows and the Sharpe-of-cash convention.
+\item \code{python recovery_figures.py run-settings}: the settings experiment of Section~\ref{sec:settings}, 1{,}920 fits, 54 minutes; writes \code{report/figures/recovery_settings.json}, which \code{plot} then turns into Figures~\ref{fig:positions}--\ref{fig:settings-maps} and Table~\ref{tab:settings}.
 \end{itemize}
 \end{document}

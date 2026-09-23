@@ -3,6 +3,8 @@
 
   python recovery_figures.py time    one job per trading rate, to estimate the run time
   python recovery_figures.py run     every experiment, in parallel; saves report/figures/recovery_results.json
+  python recovery_figures.py run-settings   the settings experiment (risk aversion, fee, depth, quartile
+                                     thresholds); saves report/figures/recovery_settings.json
   python recovery_figures.py plot    the figures, from the saved results, into report/figures/
 
 Every cell of the experiment is one trading rate (days between decisions) with
@@ -39,6 +41,21 @@ HISTOGRAM_EDGES = [0.05, 0.10]                  # these cells get more datasets,
 DATASETS_PER_HISTOGRAM = 100
 RATE_NAMES = {1: "daily", 2: "twice a week", 5: "weekly", 10: "every 2 weeks", 21: "monthly"}
 
+# A second experiment: the decision problem and the tree are changed, one or two things at a time.
+SETTINGS = {
+    "base": {},                                                  # the run of the note
+    "depth 3": {"max_depth": 3},
+    "λ = 5, depth 3": {"risk_aversion": 5.0, "max_depth": 3},
+    "λ = 10, depth 3": {"risk_aversion": 10.0, "max_depth": 3},
+    "fee 10 bp": {"fee": 0.001},
+    "quartiles, depth 3": {"threshold_quantiles": (0.25, 0.5, 0.75), "max_depth": 3},
+}
+SETTING_STEPS = [2, 5, 10, 21]
+SETTING_EDGES = [0.05, 0.10]
+DATASETS_PER_SETTING = 40
+SETTINGS_RESULTS = os.path.join(OUT, "recovery_settings.json")
+POSITION_BINS = np.linspace(-2.5, 2.5, 26)      # the mean position by bin of x, on the test rows
+
 
 def x_grid(case):
     std = np.sqrt(case.feature_variance)
@@ -58,18 +75,29 @@ def curve(case):
                     case.d, case.mean, case.step)
 
 
+def position_profile(x, weights):
+    """Mean weight by bin of x (None where fewer than 3 decisions fall)."""
+    which = np.digitize(x, POSITION_BINS) - 1
+    return [float(weights[which == b].mean()) if np.sum(which == b) >= 3 else None
+            for b in range(len(POSITION_BINS) - 1)]
+
+
 def job(task):
-    tag, case, seed = task
+    tag, case, seed, extra = task
     grid, expected = curve(case)
     result = run_case(case, seed, curve=(grid, expected))
     paths = result["paths"]
+    x_test = result["rows"].X[case.n_train:, 0]
     return {
         "tag": tag, "step": case.step, "edge": case.edge, "k": case.k,
         "volatility": case.volatility, "seed": seed, "sign_change": sign_change(grid, expected),
-        "grown": result["grown"], "kept": result["kept"],
+        "grown": result["grown"], "kept": result["kept"], "n_leaves": len(result["kept"]) + 1,
         "test_mean": {name: float(path.net_returns.mean()) for name, path in paths.items()},
         "test_sharpe": {name: float(path.sharpe) for name, path in paths.items()},
         "test_turnover": {name: float(path.turnover.mean()) for name, path in paths.items()},
+        "profile": {name: position_profile(x_test, paths[name].weights[:, 0])
+                    for name in ("tree", "ideal rule")},
+        **extra,
     }
 
 
@@ -78,16 +106,22 @@ def all_tasks():
     for step in STEPS:                          # the daily jobs are the slowest: submit them first
         for edge in EDGES:
             n = DATASETS_PER_HISTOGRAM if edge in HISTOGRAM_EDGES else DATASETS_PER_CELL
-            tasks += [("edge", replace(BASE, step=step, edge=edge), seed) for seed in range(n)]
+            tasks += [("edge", replace(BASE, step=step, edge=edge), seed, {}) for seed in range(n)]
         for k in K_VALUES:
             if k != BASE.k:
-                tasks += [("speed", replace(BASE, step=step, k=k), seed)
+                tasks += [("speed", replace(BASE, step=step, k=k), seed, {})
                           for seed in range(DATASETS_PER_CELL)]
     return tasks
 
 
-def run():
-    tasks, results, start = all_tasks(), [], time.perf_counter()
+def settings_tasks():
+    return [("settings", replace(BASE, step=step, edge=edge, **changes), seed, {"setting": name})
+            for step in SETTING_STEPS for name, changes in SETTINGS.items()
+            for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
+
+
+def run(tasks, path):
+    results, start = [], time.perf_counter()
     os.makedirs(OUT, exist_ok=True)
     with ProcessPoolExecutor(max_workers=os.cpu_count()) as pool:
         futures = [pool.submit(job, task) for task in tasks]
@@ -96,9 +130,9 @@ def run():
             if done % 50 == 0 or done == len(tasks):
                 print(f"progress: {done}/{len(tasks)} fits after {time.perf_counter() - start:.0f}s",
                       flush=True)
-    with open(RESULTS, "w") as handle:
+    with open(path, "w") as handle:
         json.dump(results, handle)
-    print(f"saved {RESULTS}")
+    print(f"saved {path}")
 
 
 # ----------------------------------------------------------------------------- summaries
@@ -160,6 +194,36 @@ def print_summary(results):
           "that keep no split;\nmedian and quartiles: first threshold on x over the datasets that "
           "split (x has standard deviation 1, the target is d = 0);\ncaptured: test gain of the tree "
           "over the tree without splits, as a share of the ideal rule's gain.")
+
+
+def setting_records(results, name, step, edge):
+    return [r for r in results if r.get("setting") == name and r["step"] == step and r["edge"] == edge]
+
+
+def setting_summary(cell, step):
+    s = cell_summary(cell, step)
+    s["leaves"] = float(np.mean([r["n_leaves"] for r in cell]))
+    s["turnover"] = {name: float(np.mean([r["test_turnover"][name] for r in cell]))
+                     for name in ("tree", "ideal rule")}
+    return s
+
+
+def print_settings_summary(results):
+    for edge in SETTING_EDGES:
+        print(f"\nsettings experiment, edge {edge:g}, {DATASETS_PER_SETTING} datasets per cell")
+        print(f"{'setting':>20} {'rate':>14} {'leaves':>6} {'on x':>5} {'none':>5} {'median':>7} "
+              f"{'tree':>6} {'ideal':>6} {'captured':>9} {'turnover':>16}")
+        for name in SETTINGS:
+            for step in SETTING_STEPS:
+                cell = setting_records(results, name, step, edge)
+                if not cell:
+                    continue
+                s = setting_summary(cell, step)
+                print(f"{name:>20} {RATE_NAMES[step]:>14} {s['leaves']:>6.2f} {s['on_x']:>5.0f} "
+                      f"{s['none']:>5.0f} {s['median']:>+7.2f} {s['sharpe']['tree']:>6.2f} "
+                      f"{s['sharpe']['ideal rule']:>6.2f} {s['captured']:>9.0f} "
+                      f"{s['turnover']['tree']:>7.2f} ({s['turnover']['ideal rule']:.2f})")
+    print("\nleaves: mean number of leaves kept; turnover: per decision, tree (ideal rule in brackets).")
 
 
 # ----------------------------------------------------------------------------- figures
@@ -363,10 +427,10 @@ def figure_histograms(results, plt):
     return fig
 
 
-def heatmap(axis, values, title, text, cmap, vmin, vmax, xlabels, xlabel):
+def heatmap(axis, values, title, text, cmap, vmin, vmax, xlabels, xlabel, steps=STEPS):
     image = axis.imshow(values, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
     axis.set_xticks(range(len(xlabels)), xlabels, fontsize=9)
-    axis.set_yticks(range(len(STEPS)), [f"{RATE_NAMES[s]}\n(every {s} d)" for s in STEPS], fontsize=9)
+    axis.set_yticks(range(len(steps)), [f"{RATE_NAMES[s]}\n(every {s} d)" for s in steps], fontsize=9)
     axis.set_xlabel(xlabel, fontsize=9.5)
     axis.set_title(title, fontsize=10)
     for i in range(values.shape[0]):
@@ -436,6 +500,76 @@ def figure_thresholds_by_rate(results, plt):
     return fig
 
 
+def figure_settings_positions(results, plt, step=5):
+    """Mean test position by x: the tree (median and quartiles over datasets) against the ideal rule."""
+    names = list(SETTINGS)
+    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 13), sharex=True, sharey=True)
+    centers = (POSITION_BINS[:-1] + POSITION_BINS[1:]) / 2
+    for j, name in enumerate(names):
+        for i, edge in enumerate(SETTING_EDGES):
+            axis = axes[j, i]
+            cell = setting_records(results, name, step, edge)
+            if not cell:
+                continue
+            tree = np.array([[np.nan if v is None else v for v in r["profile"]["tree"]] for r in cell])
+            ideal = np.array([[np.nan if v is None else v for v in r["profile"]["ideal rule"]] for r in cell])
+            low, mid, high = np.nanpercentile(tree, [25, 50, 75], axis=0)
+            axis.fill_between(centers, low, high, color=ORANGE, alpha=0.25, lw=0,
+                              label="tree: quartiles over datasets")
+            axis.plot(centers, mid, color=ORANGE, lw=2, label="tree: median over datasets")
+            axis.plot(centers, np.nanmedian(ideal, axis=0), color=BLUE, lw=1.6, ls="--",
+                      label="ideal rule: median over datasets")
+            axis.axvline(BASE.d, color="black", ls=":", lw=1)
+            s = setting_summary(cell, step)
+            axis.set_title(f"{name}, edge {edge:g}: {s['leaves']:.1f} leaves, Sharpe "
+                           f"{s['sharpe']['tree']:.2f} ({s['sharpe']['ideal rule']:.2f})", fontsize=9)
+            if i == 0:
+                axis.set_ylabel("mean weight of the asset")
+            if j == len(names) - 1:
+                axis.set_xlabel("x on the decision day")
+    axes[0, 0].set_ylim(-0.05, 1.05)
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=9, frameon=False)
+    fig.suptitle(f"Position taken on the test decisions, by x ({RATE_NAMES[step]} decisions, "
+                 f"{DATASETS_PER_SETTING} datasets per panel)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.98))
+    return fig
+
+
+def figure_settings_maps(results, plt, edge=0.10):
+    names = list(SETTINGS)
+    shape = (len(SETTING_STEPS), len(names))
+    captured, tree, ideal, leaves, turnover, turn_ideal = (np.full(shape, np.nan) for _ in range(6))
+    for i, step in enumerate(SETTING_STEPS):
+        for j, name in enumerate(names):
+            cell = setting_records(results, name, step, edge)
+            if not cell:
+                continue
+            s = setting_summary(cell, step)
+            captured[i, j], leaves[i, j] = s["captured"], s["leaves"]
+            tree[i, j], ideal[i, j] = s["sharpe"]["tree"], s["sharpe"]["ideal rule"]
+            turnover[i, j], turn_ideal[i, j] = s["turnover"]["tree"], s["turnover"]["ideal rule"]
+    labels = [n.replace(", ", "\n") for n in names]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    axes = axes.ravel()
+    heatmap(axes[0], captured, "test gain over the tree without splits,\nas % of the ideal rule's gain",
+            lambda i, j: f"{captured[i, j]:.0f}", "RdYlGn", -50, 110, labels, "", SETTING_STEPS)
+    heatmap(axes[1], tree, "annualized test Sharpe ratio of the tree\n(ideal rule in brackets)",
+            lambda i, j: f"{tree[i, j]:.2f}\n({ideal[i, j]:.2f})", "Blues", 0, max(1.0, np.nanmax(tree)),
+            labels, "", SETTING_STEPS)
+    heatmap(axes[2], leaves, "mean number of leaves kept", lambda i, j: f"{leaves[i, j]:.1f}",
+            "Oranges", 1, 8, labels, "", SETTING_STEPS)
+    heatmap(axes[3], turnover, "turnover per decision of the tree\n(ideal rule in brackets)",
+            lambda i, j: f"{turnover[i, j]:.2f}\n({turn_ideal[i, j]:.2f})", "Purples", 0,
+            max(1.0, np.nanmax(turnover)), labels, "", SETTING_STEPS)
+    for axis in axes[:2]:
+        axis.set_ylabel("trading rate", fontsize=9.5)
+    fig.suptitle(f"The settings experiment at edge {edge:g} ({DATASETS_PER_SETTING} datasets per cell)",
+                 fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
 def plot():
     import matplotlib
     matplotlib.use("Agg")
@@ -467,6 +601,12 @@ def plot():
             "recovery_maps_by_k": figure_maps(results, plt, "k", K_VALUES, k_labels,
                                               "reversion speed of x per day"),
             "recovery_thresholds_by_rate": figure_thresholds_by_rate(results, plt)})
+    if os.path.exists(SETTINGS_RESULTS):
+        with open(SETTINGS_RESULTS) as handle:
+            settings = json.load(handle)
+        print_settings_summary(settings)
+        figures.update({"recovery_settings_positions": figure_settings_positions(settings, plt),
+                        "recovery_settings_maps": figure_settings_maps(settings, plt)})
     for name, fig in figures.items():
         fig.savefig(os.path.join(OUT, name + ".pdf"))
         fig.savefig(os.path.join(OUT, name + ".png"), dpi=130)
@@ -489,7 +629,9 @@ if __name__ == "__main__":
         print(f"{len(tasks)} fits, about {total / 3600:.1f} core-hours; on about 6 effective "
               f"cores: about {total / 6 / 60:.0f} minutes")
     elif command == "run":
-        run()
+        run(all_tasks(), RESULTS)
+    elif command == "run-settings":
+        run(settings_tasks(), SETTINGS_RESULTS)
     elif command == "plot":
         plot()
     else:

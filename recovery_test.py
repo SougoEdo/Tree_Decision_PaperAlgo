@@ -55,6 +55,13 @@ class Case:
     train_days: int = 15 * DAYS_PER_YEAR  # days of training data (fitting + checking)
     test_days: int = 5 * DAYS_PER_YEAR  # days kept for the test
     ridge: float = 1e-6
+    # the decision problem and the tree (defaults: the run of the note)
+    risk_aversion: float = 1.0  # lambda of the optimizer
+    fee: float = 0.0003  # per traded notional on the asset; cash is free
+    max_depth: int = 2
+    min_samples_leaf: int = 20
+    max_thresholds: int | None = None  # None: every partition is screened
+    threshold_quantiles: tuple[float, ...] | None = None  # e.g. (0.25, 0.5, 0.75)
 
     @property
     def mu(self):
@@ -175,12 +182,14 @@ def run_case(case, seed, verbose=False, curve=None):
     X, R, S = rows.X, rows.R, rows.Sigma
     train, test = slice(0, case.n_train), slice(case.n_train, None)
     optimizer = PortfolioOptimizer(
-        2, PortfolioConfig(max_weight=1.0, fee_rate=(0.0003, 0.0), risk_aversion=1.0)
+        2, PortfolioConfig(max_weight=1.0, fee_rate=(case.fee, 0.0),
+                           risk_aversion=case.risk_aversion)
     )
     config = TreeConfig(
-        max_depth=2,
-        min_samples_leaf=20,
-        max_thresholds=None,
+        max_depth=case.max_depth,
+        min_samples_leaf=case.min_samples_leaf,
+        max_thresholds=case.max_thresholds,
+        threshold_quantiles=case.threshold_quantiles,
         validation_fraction=0.25,
         verbose=verbose,
     )

@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.7.15)  22 SEP 2026 15:05
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.7.15)  22 SEP 2026 18:37
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -466,76 +466,87 @@ LaTeX Font Info:    Trying to load font information for T1+lmtt on input line 63
  (/Users/localpilot/Library/TinyTeX/texmf-dist/tex/latex/lm/t1lmtt.fd
 File: t1lmtt.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 ) [2]
-<figures/recovery_world.pdf, id=86, 650.43pt x 361.35pt>
+<figures/recovery_world.pdf, id=90, 650.43pt x 361.35pt>
 File: figures/recovery_world.pdf Graphic file (type pdf)
 <use figures/recovery_world.pdf>
 Package pdftex.def Info: figures/recovery_world.pdf  used on input line 103.
 (pdftex.def)             Requested size: 448.6987pt x 249.28215pt.
  [3 <./figures/recovery_world.pdf>]
-<figures/recovery_learned.pdf, id=151, 650.43pt x 448.07399pt>
+<figures/recovery_learned.pdf, id=155, 650.43pt x 448.07399pt>
 File: figures/recovery_learned.pdf Graphic file (type pdf)
 <use figures/recovery_learned.pdf>
 Package pdftex.def Info: figures/recovery_learned.pdf  used on input line 120.
 (pdftex.def)             Requested size: 448.6987pt x 309.10983pt.
-<figures/recovery_decisions.pdf, id=156, 650.43pt x 614.295pt>
+<figures/recovery_decisions.pdf, id=160, 650.43pt x 614.295pt>
 File: figures/recovery_decisions.pdf Graphic file (type pdf)
 <use figures/recovery_decisions.pdf>
 Package pdftex.def Info: figures/recovery_decisions.pdf  used on input line 125.
 (pdftex.def)             Requested size: 448.6987pt x 423.77963pt.
  [4 <./figures/recovery_learned.pdf>]
-<figures/recovery_histograms.pdf, id=225, 614.295pt x 831.105pt>
+<figures/recovery_histograms.pdf, id=229, 614.295pt x 831.105pt>
 File: figures/recovery_histograms.pdf Graphic file (type pdf)
 <use figures/recovery_histograms.pdf>
 Package pdftex.def Info: figures/recovery_histograms.pdf  used on input line 132.
 (pdftex.def)             Requested size: 434.5298pt x 587.89476pt.
-<figures/recovery_thresholds_by_rate.pdf, id=226, 614.295pt x 332.44202pt>
+<figures/recovery_thresholds_by_rate.pdf, id=230, 614.295pt x 332.44202pt>
 File: figures/recovery_thresholds_by_rate.pdf Graphic file (type pdf)
 <use figures/recovery_thresholds_by_rate.pdf>
 Package pdftex.def Info: figures/recovery_thresholds_by_rate.pdf  used on input line 137.
 (pdftex.def)             Requested size: 472.31595pt x 255.61082pt.
  [5 <./figures/recovery_decisions.pdf>] [6 <./figures/recovery_histograms.pdf>]
-<figures/recovery_maps.pdf, id=354, 758.835pt x 650.43pt>
+<figures/recovery_maps.pdf, id=358, 758.835pt x 650.43pt>
 File: figures/recovery_maps.pdf Graphic file (type pdf)
 <use figures/recovery_maps.pdf>
 Package pdftex.def Info: figures/recovery_maps.pdf  used on input line 144.
 (pdftex.def)             Requested size: 448.6987pt x 384.6039pt.
-<figures/recovery_maps_by_k.pdf, id=355, 758.835pt x 650.43pt>
+<figures/recovery_maps_by_k.pdf, id=359, 758.835pt x 650.43pt>
 File: figures/recovery_maps_by_k.pdf Graphic file (type pdf)
 <use figures/recovery_maps_by_k.pdf>
 Package pdftex.def Info: figures/recovery_maps_by_k.pdf  used on input line 149.
 (pdftex.def)             Requested size: 448.6987pt x 384.6039pt.
  [7 <./figures/recovery_thresholds_by_rate.pdf>] [8 <./figures/recovery_maps.pdf>] [9 <./figures/recovery_maps_by_k.pdf>] [10]
-<figures/first_recovery_histograms.pdf, id=581, 722.7pt x 317.98799pt>
+<figures/first_recovery_histograms.pdf, id=585, 722.7pt x 317.98799pt>
 File: figures/first_recovery_histograms.pdf Graphic file (type pdf)
 <use figures/first_recovery_histograms.pdf>
 Package pdftex.def Info: figures/first_recovery_histograms.pdf  used on input line 255.
 (pdftex.def)             Requested size: 472.31595pt x 207.82027pt.
-<figures/first_recovery_maps.pdf, id=582, 939.51pt x 303.534pt>
+<figures/first_recovery_maps.pdf, id=586, 939.51pt x 303.534pt>
 File: figures/first_recovery_maps.pdf Graphic file (type pdf)
 <use figures/first_recovery_maps.pdf>
 Package pdftex.def Info: figures/first_recovery_maps.pdf  used on input line 259.
 (pdftex.def)             Requested size: 472.31595pt x 152.59103pt.
- [11] [12 <./figures/first_recovery_histograms.pdf> <./figures/first_recovery_maps.pdf>] [13] (./recovery_note.aux)
+ [11] [12 <./figures/first_recovery_histograms.pdf> <./figures/first_recovery_maps.pdf>]
+<figures/recovery_settings_positions.pdf, id=729, 614.295pt x 939.51pt>
+File: figures/recovery_settings_positions.pdf Graphic file (type pdf)
+<use figures/recovery_settings_positions.pdf>
+Package pdftex.def Info: figures/recovery_settings_positions.pdf  used on input line 304.
+(pdftex.def)             Requested size: 415.64034pt x 635.69016pt.
+<figures/recovery_settings_maps.pdf, id=730, 867.24pt x 650.43pt>
+File: figures/recovery_settings_maps.pdf Graphic file (type pdf)
+<use figures/recovery_settings_maps.pdf>
+Package pdftex.def Info: figures/recovery_settings_maps.pdf  used on input line 309.
+(pdftex.def)             Requested size: 448.6987pt x 336.52841pt.
+ [13] [14 <./figures/recovery_settings_positions.pdf>] [15 <./figures/recovery_settings_maps.pdf>] [16] [17] (./recovery_note.aux)
  ***********
 LaTeX2e <2026-06-01>
 L3 programming layer <2026-06-18>
  ***********
 Package rerunfilecheck Info: File `recovery_note.out' has not changed.
-(rerunfilecheck)             Checksum: 1D442E107E143A188FAEB15BF9D28496;2274.
+(rerunfilecheck)             Checksum: A23AC73490E23580B5EA122AA729A348;2700.
  ) 
 Here is how much of TeX's memory you used:
- 12564 strings out of 469158
- 200939 string characters out of 5459505
- 634509 words of memory out of 5000000
- 41341 multiletter control sequences out of 15000+600000
+ 12601 strings out of 469158
+ 202007 string characters out of 5459505
+ 641028 words of memory out of 5000000
+ 41368 multiletter control sequences out of 15000+600000
  695565 words of font info for 89 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
- 74i,13n,79p,788b,564s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 74i,13n,79p,854b,564s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmbx10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmbx12.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmex10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi6.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi8.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr12.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr17.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr7.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr8.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmri10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmsy10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmsy8.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmtt10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on recovery_note.pdf (13 pages, 508724 bytes).
+Output written on recovery_note.pdf (17 pages, 569761 bytes).
 PDF statistics:
- 812 PDF objects out of 1000 (max. 8388607)
- 294 compressed objects within 3 object streams
- 47 named destinations out of 1000 (max. 500000)
- 134 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 982 PDF objects out of 1000 (max. 8388607)
+ 353 compressed objects within 4 object streams
+ 57 named destinations out of 1000 (max. 500000)
+ 152 words of extra memory for PDF output out of 10000 (max. 10000000)
 

@@ -88,6 +88,7 @@ class TreeConfig:
     max_depth: int = 4  # root depth is 0; zero means one leaf
     min_samples_leaf: int = 10
     max_thresholds: int | None = 10  # None tests every distinct partition
+    threshold_quantiles: tuple[float, ...] | None = None  # e.g. (0.25, 0.5, 0.75): only the quantiles of the node's values
     min_regret_improvement: float = 1e-6  # average gain per observation at node
     shortlist_size: int = 3  # screened splits per leaf that get a full fit and replay
     min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
@@ -492,6 +493,10 @@ class SPOPortfolioTree:
             config.max_depth < 0
             or config.min_samples_leaf < 1
             or (config.max_thresholds is not None and config.max_thresholds < 1)
+            or (
+                config.threshold_quantiles is not None
+                and not all(0 < q < 1 for q in config.threshold_quantiles)
+            )
             or config.shortlist_size < 1
             or config.search_passes < 1
             or config.search_grid_size < 3
@@ -916,6 +921,11 @@ class SPOPortfolioTree:
             len(values) - left_sizes >= self.config.min_samples_leaf
         )
         thresholds = thresholds[valid]
+        quantiles = self.config.threshold_quantiles
+        if quantiles is not None and len(thresholds):
+            # Only the partitions closest to the requested quantiles of the values.
+            nearest = [int(np.argmin(np.abs(thresholds - q))) for q in np.quantile(values, quantiles)]
+            thresholds = thresholds[np.unique(nearest)]
         limit = self.config.max_thresholds
         if limit is not None and len(thresholds) > limit:
             selected = np.linspace(0, len(thresholds) - 1, limit).astype(int)

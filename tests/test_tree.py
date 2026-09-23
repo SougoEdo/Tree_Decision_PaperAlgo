@@ -84,6 +84,19 @@ def leaves(node, depth=0):
     return leaves(node.left, depth + 1) + leaves(node.right, depth + 1)
 
 
+class ThresholdQuantilesTest(unittest.TestCase):
+    def test_only_the_partitions_nearest_to_the_quantiles_are_screened(self):
+        optimizer = PortfolioOptimizer(2, PortfolioConfig())
+        tree = SPOPortfolioTree(optimizer, TreeConfig(min_samples_leaf=5,
+                                                     threshold_quantiles=(0.25, 0.5, 0.75)))
+        values = np.arange(100.0)
+        np.testing.assert_allclose(tree._thresholds(values), [24.5, 49.5, 74.5])
+        every = SPOPortfolioTree(optimizer, TreeConfig(min_samples_leaf=5, max_thresholds=None))
+        self.assertEqual(len(every._thresholds(values)), 91)
+        with self.assertRaises(ValueError):
+            SPOPortfolioTree(optimizer, TreeConfig(threshold_quantiles=(0.0, 0.5)))
+
+
 class PathAwareTreeTest(unittest.TestCase):
     def test_splits_on_the_regime_feature_and_raises_the_sharpe(self):
         X, returns, covariance, regime = regime_data(seed=0)
