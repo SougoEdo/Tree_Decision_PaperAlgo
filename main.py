@@ -88,11 +88,14 @@ class TreeConfig:
     max_depth: int = 4  # root depth is 0; zero means one leaf
     min_samples_leaf: int = 10
     max_thresholds: int | None = 10  # None tests every distinct partition
-    threshold_quantiles: tuple[float, ...] | None = None  # e.g. (0.25, 0.5, 0.75): only the quantiles of the node's values
+    threshold_quantiles: tuple[float, ...] | None = (
+        None  # e.g. (0.25, 0.5, 0.75): these quantiles, by rank, of the admissible thresholds
+    )
     min_leaf_fraction: float = 0.0  # each child keeps at least this share of its node's rows (on top of min_samples_leaf)
     refine_thresholds: bool = False  # with threshold_quantiles: also screen every partition around the best quantile
     refine_standard_errors: float = 0.0  # hard splits: a refined threshold must beat the quantile one by this many s.e.
     smoothing: float = 0.0  # > 0: soft splits with Boltzmann weights exp(-z / smoothing) over the candidate thresholds
+    prune_standard_errors: float = 0.0  # pruning keeps a split only if its checking-row regret gain exceeds this many s.e.
     min_regret_improvement: float = 1e-6  # average gain per observation at node
     shortlist_size: int = 3  # screened splits per leaf that get a full fit and replay
     min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
@@ -449,12 +452,18 @@ class Node:
     n_samples: int
     regret_sum: float
     feature: int | None = None
-    threshold: float | None = None  # a soft split reports the weighted median of `thresholds`
+    threshold: float | None = (
+        None  # a soft split reports the weighted median of `thresholds`
+    )
     left: Node | None = None
     right: Node | None = None
-    thresholds: np.ndarray | None = None  # soft split: candidate thresholds, ascending ...
+    thresholds: np.ndarray | None = (
+        None  # soft split: candidate thresholds, ascending ...
+    )
     weights: np.ndarray | None = None  # ... and their Boltzmann weights, summing to 1
-    spread: float = 0.0  # soft split: thresholds between the 25% and 75% weight quantiles
+    spread: float = (
+        0.0  # soft split: thresholds between the 25% and 75% weight quantiles
+    )
 
 
 @dataclass(frozen=True)
@@ -486,6 +495,7 @@ class PruneRecord:
     sharpe_with: float  # Sharpe ratio on the checking rows
     sharpe_without: float
     kept: bool
+    standard_error: float = 0.0  # of the mean regret improvement on the checking rows
 
 
 # 4. Grow one tree on its own replayed training path.
@@ -493,8 +503,9 @@ class SPOPortfolioTree:
     """See the module docstring. Three options extend the plain tree; all are
     off by default, and then the tree is exactly the one described there.
 
-    threshold_quantiles (+ min_leaf_fraction): only the partitions nearest to
-    these quantiles of a node's values are screened, and every child keeps at
+    threshold_quantiles (+ min_leaf_fraction): only these quantiles, by rank,
+    of the admissible thresholds of a node are screened (the admissible ones
+    leave at least the leaf minimum on each side), and every child keeps at
     least that share of its node. With refine_thresholds, every partition
     between the neighbouring quantile candidates of the best one is screened
     as well; with hard splits the refined threshold replaces the quantile one
@@ -542,6 +553,7 @@ class SPOPortfolioTree:
                     config.min_leaf_fraction,
                     config.refine_standard_errors,
                     config.smoothing,
+                    config.prune_standard_errors,
                 ]
             ).all()
             or config.min_regret_improvement < 0
@@ -552,6 +564,7 @@ class SPOPortfolioTree:
             or not 0 <= config.min_leaf_fraction < 0.5
             or config.refine_standard_errors < 0
             or config.smoothing < 0
+            or config.prune_standard_errors < 0
         ):
             raise ValueError(
                 "Invalid improvement thresholds, prediction bound, regret tolerance, "
@@ -608,7 +621,9 @@ class SPOPortfolioTree:
                 self._measure_from(path)
                 for leaf, rows, weights, _ in leaves:
                     leaf.n_samples = int(round(weights.sum()))
-                    leaf.regret_sum = self._score_prediction(leaf.prediction, rows, weights)
+                    leaf.regret_sum = self._score_prediction(
+                        leaf.prediction, rows, weights
+                    )
                 # Always kept: the scores it replaces never saw the checking rows.
                 self._refit_leaves(leaves, scores, path, on_all_rows=True)
             self.root = root
@@ -646,9 +661,21 @@ class SPOPortfolioTree:
             split = self._best_split(leaves, scores, path.sharpe)
             if split is None:
                 break
-            (position, feature, thresholds, pis, left, right,
-             left_rows, left_weights, right_rows, right_weights,
-             gain, new_scores, new_path) = split
+            (
+                position,
+                feature,
+                thresholds,
+                pis,
+                left,
+                right,
+                left_rows,
+                left_weights,
+                right_rows,
+                right_weights,
+                gain,
+                new_scores,
+                new_path,
+            ) = split
             node, node_rows, node_weights, depth = leaves.pop(position)
             self._set_split(node, feature, thresholds, pis)
             node.left, node.right = left, right
@@ -669,7 +696,11 @@ class SPOPortfolioTree:
                 )
             )
             if self.config.verbose:
-                soft = f" (soft, spread {node.spread:.3g})" if node.thresholds is not None else ""
+                soft = (
+                    f" (soft, spread {node.spread:.3g})"
+                    if node.thresholds is not None
+                    else ""
+                )
                 print(
                     f"split {len(self.growth_log)}: depth={depth}, "
                     f"N={int(round(node_weights.sum()))}, x[{feature}] <= {node.threshold:.5g}{soft}, "
@@ -728,9 +759,14 @@ class SPOPortfolioTree:
             node.spread = 0.0
             node.prediction, node.regret_sum = leaf.prediction, leaf.regret_sum
             without = checking_path()
+            # Paired over the checking rows: the improvement of the split and its
+            # standard error (rows treated as independent).
+            gain = without.regret - with_split.regret
+            improvement = float(gain.mean())
+            error = float(gain.std(ddof=1) / np.sqrt(len(gain))) if len(gain) > 1 else 0.0
             kept = bool(
-                without.regret.mean() - with_split.regret.mean()
-                > c.min_regret_improvement
+                improvement > c.min_regret_improvement
+                and improvement > c.prune_standard_errors * error
                 and with_split.sharpe > without.sharpe + c.min_sharpe_improvement
             )
             if kept:
@@ -755,6 +791,7 @@ class SPOPortfolioTree:
                     with_split.sharpe,
                     without.sharpe,
                     kept,
+                    error,
                 )
             )
             if c.verbose:
@@ -762,7 +799,8 @@ class SPOPortfolioTree:
                     f"prune check: depth={depth}, x[{split[0]}] <= {split[1]:.5g}, "
                     f"checking regret {without.regret.mean():.5f} -> "
                     f"{with_split.regret.mean():.5f} with the split, "
-                    f"Sharpe {without.sharpe:.4f} -> {with_split.sharpe:.4f} "
+                    f"Sharpe {without.sharpe:.4f} -> {with_split.sharpe:.4f}, "
+                    f"gain {improvement:.2g} +/- {error:.2g} "
                     f"({'kept' if kept else 'removed'})"
                 )
 
@@ -774,7 +812,9 @@ class SPOPortfolioTree:
         """Weight with which values x fall on the left of a split: the total
         weight of the candidate thresholds at or above x (1 or 0 for a hard split)."""
         cumulative = np.concatenate([[0.0], np.cumsum(pis)])
-        below = np.searchsorted(thresholds, x, side="left")  # candidates strictly below x
+        below = np.searchsorted(
+            thresholds, x, side="left"
+        )  # candidates strictly below x
         return np.clip(1.0 - cumulative[below], 0.0, 1.0)
 
     def _membership(self, node, x):
@@ -788,13 +828,21 @@ class SPOPortfolioTree:
         node.feature = feature
         if len(thresholds) == 1:
             node.threshold, node.thresholds, node.weights, node.spread = (
-                float(thresholds[0]), None, None, 0.0,
+                float(thresholds[0]),
+                None,
+                None,
+                0.0,
             )
             return
         cumulative = np.cumsum(pis)
-        quantile = lambda q: float(thresholds[min(np.searchsorted(cumulative, q), len(thresholds) - 1)])
+        quantile = lambda q: float(
+            thresholds[min(np.searchsorted(cumulative, q), len(thresholds) - 1)]
+        )
         node.threshold = quantile(0.5)
-        node.thresholds, node.weights = np.asarray(thresholds, dtype=float), np.asarray(pis, dtype=float)
+        node.thresholds, node.weights = (
+            np.asarray(thresholds, dtype=float),
+            np.asarray(pis, dtype=float),
+        )
         node.spread = quantile(0.75) - quantile(0.25)
 
     def _leaves(self, node, X, rows=None, weights=None, depth=0):
@@ -807,7 +855,9 @@ class SPOPortfolioTree:
         left, right = m > 0, m < 1
         return self._leaves(
             node.left, X, rows[left], (weights * m)[left], depth + 1
-        ) + self._leaves(node.right, X, rows[right], (weights * (1 - m))[right], depth + 1)
+        ) + self._leaves(
+            node.right, X, rows[right], (weights * (1 - m))[right], depth + 1
+        )
 
     def _scores(self, leaves, n_rows):
         """Per-row scores from a list of (leaf, rows, weights, depth): the
@@ -849,24 +899,56 @@ class SPOPortfolioTree:
                 m = self._membership_of(thresholds, pis, self._X[rows, feature])
                 on_left, on_right = m > 0, m < 1
                 left_rows, left_weights = rows[on_left], (weights * m)[on_left]
-                right_rows, right_weights = rows[on_right], (weights * (1 - m))[on_right]
+                right_rows, right_weights = (
+                    rows[on_right],
+                    (weights * (1 - m))[on_right],
+                )
                 left = self._fit_leaf(left_rows, parent.prediction, left_weights)
                 right = self._fit_leaf(right_rows, parent.prediction, right_weights)
                 reduction = parent.regret_sum - left.regret_sum - right.regret_sum
                 if reduction / mass > c.min_regret_improvement:
                     candidates.append(
-                        (reduction, position, feature, thresholds, pis, m,
-                         left, right, left_rows, left_weights, right_rows, right_weights)
+                        (
+                            reduction,
+                            position,
+                            feature,
+                            thresholds,
+                            pis,
+                            m,
+                            left,
+                            right,
+                            left_rows,
+                            left_weights,
+                            right_rows,
+                            right_weights,
+                        )
                     )
         # The SPO loss chooses (largest total regret reduction over all leaves,
         # as in SPOT); the replayed Sharpe must confirm, else the next one is tried.
         candidates.sort(key=lambda candidate: candidate[0], reverse=True)
-        for (reduction, position, feature, thresholds, pis, m,
-             left, right, left_rows, left_weights, right_rows, right_weights) in candidates:
+        for (
+            reduction,
+            position,
+            feature,
+            thresholds,
+            pis,
+            m,
+            left,
+            right,
+            left_rows,
+            left_weights,
+            right_rows,
+            right_weights,
+        ) in candidates:
             # Scores of the tree with this split, rebuilt from its leaves (exact).
-            trial = (leaves[:position]
-                     + [(left, left_rows, left_weights, 0), (right, right_rows, right_weights, 0)]
-                     + leaves[position + 1:])
+            trial = (
+                leaves[:position]
+                + [
+                    (left, left_rows, left_weights, 0),
+                    (right, right_rows, right_weights, 0),
+                ]
+                + leaves[position + 1 :]
+            )
             candidate = self._scores(trial, len(scores))
             path = self._replay(candidate)
             # TODO: a split is judged as a whole, so a profitable split whose
@@ -875,9 +957,21 @@ class SPOPortfolioTree:
             # module docstring).
             if path.sharpe > sharpe + c.min_sharpe_improvement:  # NaN never qualifies
                 gain = reduction / weights.sum()
-                return (position, feature, thresholds, pis, left, right,
-                        left_rows, left_weights, right_rows, right_weights,
-                        gain, candidate, path)
+                return (
+                    position,
+                    feature,
+                    thresholds,
+                    pis,
+                    left,
+                    right,
+                    left_rows,
+                    left_weights,
+                    right_rows,
+                    right_weights,
+                    gain,
+                    candidate,
+                    path,
+                )
         return None
 
     def _shortlist(self, rows, weights):
@@ -896,13 +990,21 @@ class SPOPortfolioTree:
             keep_rows = c.smoothing > 0 or c.refine_thresholds
             sums, per_row = self._screen(rows, weights, values, candidates, keep_rows)
             if c.refine_thresholds:
-                every = self._thresholds(values, weights, min_leaf, use_quantiles=False, limit=False)
+                every = self._thresholds(
+                    values, weights, min_leaf, use_quantiles=False, limit=False
+                )
                 best = int(np.argmin(sums))
                 lower = candidates[best - 1] if best > 0 else -np.inf
                 upper = candidates[best + 1] if best + 1 < len(candidates) else np.inf
-                window = self._thin(every[(every > lower) & (every < upper) & ~np.isin(every, candidates)])
+                window = self._thin(
+                    every[
+                        (every > lower) & (every < upper) & ~np.isin(every, candidates)
+                    ]
+                )
                 if len(window):
-                    window_sums, window_rows = self._screen(rows, weights, values, window, True)
+                    window_sums, window_rows = self._screen(
+                        rows, weights, values, window, True
+                    )
                     if c.smoothing > 0:
                         candidates = np.concatenate([candidates, window])
                         sums = np.concatenate([sums, window_sums])
@@ -913,21 +1015,32 @@ class SPOPortfolioTree:
                             window_rows[refined] - per_row[best]
                         )
                         if sums[best] - window_sums[refined] > hurdle:
-                            candidates[best], sums[best] = window[refined], window_sums[refined]
+                            candidates[best], sums[best] = (
+                                window[refined],
+                                window_sums[refined],
+                            )
             if c.smoothing > 0:
                 best = int(np.argmin(sums))
                 z = np.empty(len(candidates))
                 for k in range(len(candidates)):
                     excess = sums[k] - sums[best]
                     error = self._standard_error(per_row[k] - per_row[best])
-                    z[k] = excess / error if error > 0 else (0.0 if excess <= 0 else np.inf)
+                    z[k] = (
+                        excess / error
+                        if error > 0
+                        else (0.0 if excess <= 0 else np.inf)
+                    )
                 pis = np.exp(-z / c.smoothing)
                 pis /= pis.sum()
                 order = np.argsort(candidates)
-                screened.append((float(sums[best]), feature, candidates[order], pis[order]))
+                screened.append(
+                    (float(sums[best]), feature, candidates[order], pis[order])
+                )
             else:
                 for threshold, total in zip(candidates, sums):
-                    screened.append((float(total), feature, np.array([threshold]), np.array([1.0])))
+                    screened.append(
+                        (float(total), feature, np.array([threshold]), np.array([1.0]))
+                    )
         screened.sort(key=lambda split: split[0])
         return [split[1:] for split in screened[: c.shortlist_size]]
 
@@ -943,7 +1056,9 @@ class SPOPortfolioTree:
             for side in (left, ~left):
                 part = rows[side]
                 score = np.clip(
-                    np.average(self._R[part], axis=0, weights=weights[side]), -bound, bound
+                    np.average(self._R[part], axis=0, weights=weights[side]),
+                    -bound,
+                    bound,
                 )
                 regret[side] = self._regret_rows(score, part)
             regret *= weights
@@ -967,9 +1082,13 @@ class SPOPortfolioTree:
         never saw, so it is kept whatever the Sharpe of the training path does.
         """
         refits = [
-            self._fit_leaf(rows, node.prediction, weights) for node, rows, weights, _ in leaves
+            self._fit_leaf(rows, node.prediction, weights)
+            for node, rows, weights, _ in leaves
         ]
-        trial = [(refit, rows, weights, 0) for refit, (_, rows, weights, _) in zip(refits, leaves)]
+        trial = [
+            (refit, rows, weights, 0)
+            for refit, (_, rows, weights, _) in zip(refits, leaves)
+        ]
         candidate = self._scores(trial, len(scores))
         refit_path = self._replay(candidate)
         kept = on_all_rows or refit_path.sharpe >= path.sharpe
@@ -1007,7 +1126,9 @@ class SPOPortfolioTree:
         # point, not the regret minimizer.
         c = self.config
         bound = c.prediction_bound
-        best = np.clip(np.average(self._R[indices], axis=0, weights=weights), -bound, bound)
+        best = np.clip(
+            np.average(self._R[indices], axis=0, weights=weights), -bound, bound
+        )
         best_loss = self._score_prediction(best, indices, weights)
         if parent_prediction is not None:
             loss = self._score_prediction(parent_prediction, indices, weights)
@@ -1032,7 +1153,9 @@ class SPOPortfolioTree:
         n_samples = len(indices) if weights is None else int(round(weights.sum()))
         return Node(best, n_samples, best_loss)
 
-    def _thresholds(self, values, weights=None, min_leaf=None, use_quantiles=True, limit=True):
+    def _thresholds(
+        self, values, weights=None, min_leaf=None, use_quantiles=True, limit=True
+    ):
         """Candidate thresholds: midpoints of consecutive distinct values whose
         two sides each carry at least min_leaf rows (weighted with soft splits)."""
         min_leaf = self.config.min_samples_leaf if min_leaf is None else min_leaf
@@ -1050,9 +1173,10 @@ class SPOPortfolioTree:
         thresholds = thresholds[valid]
         quantiles = self.config.threshold_quantiles
         if use_quantiles and quantiles is not None and len(thresholds):
-            # Only the partitions closest to the requested quantiles of the values.
-            nearest = [int(np.argmin(np.abs(thresholds - q))) for q in np.quantile(values, quantiles)]
-            thresholds = thresholds[np.unique(nearest)]
+            # Quantiles by rank among the admissible thresholds: evenly spread
+            # over what the leaf minimum allows, never on its boundary.
+            ranks = np.round(np.asarray(quantiles, dtype=float) * (len(thresholds) - 1)).astype(int)
+            thresholds = thresholds[np.unique(ranks)]
         return self._thin(thresholds) if limit else thresholds
 
     def _thin(self, thresholds):
@@ -1111,7 +1235,9 @@ class SPOPortfolioTree:
                     if node.thresholds is not None
                     else ""
                 )
-                print(f"{indent}if {names[node.feature]} <= {node.threshold:.6g}{soft}:")
+                print(
+                    f"{indent}if {names[node.feature]} <= {node.threshold:.6g}{soft}:"
+                )
                 visit(node.left, indent + "  ")
                 print(f"{indent}else:")
                 visit(node.right, indent + "  ")

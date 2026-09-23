@@ -92,8 +92,8 @@ class ThresholdQuantilesTest(unittest.TestCase):
         optimizer = PortfolioOptimizer(2, PortfolioConfig())
         tree = SPOPortfolioTree(optimizer, TreeConfig(min_samples_leaf=5,
                                                      threshold_quantiles=(0.25, 0.5, 0.75)))
-        values = np.arange(100.0)
-        np.testing.assert_allclose(tree._thresholds(values), [24.5, 49.5, 74.5])
+        values = np.arange(100.0)          # admissible thresholds 4.5 ... 94.5 (91 of them)
+        np.testing.assert_allclose(tree._thresholds(values), [26.5, 49.5, 72.5])   # ranks 22, 45, 68
         every = SPOPortfolioTree(optimizer, TreeConfig(min_samples_leaf=5, max_thresholds=None))
         self.assertEqual(len(every._thresholds(values)), 91)
         with self.assertRaises(ValueError):
@@ -448,8 +448,9 @@ class SoftSplitOptionsTest(unittest.TestCase):
         fine = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
             max_depth=1, min_samples_leaf=10, max_thresholds=None, threshold_quantiles=deciles,
             refine_thresholds=True)).fit(X, returns, covariance)
-        self.assertGreater(abs(coarse.root.threshold - 0.26), 0.05)     # a decile of a uniform sample
+        self.assertGreater(abs(coarse.root.threshold - 0.26), 0.03)     # a decile candidate, off the target
         self.assertLess(abs(fine.root.threshold - 0.26), 0.02)          # the midpoint between the two nearest x
+        self.assertLess(abs(fine.root.threshold - 0.26), abs(coarse.root.threshold - 0.26))
         self.assertIsNone(fine.root.thresholds)                          # still a hard split
 
     def test_a_soft_split_with_a_tiny_smoothing_is_the_hard_split(self):
@@ -476,6 +477,22 @@ class SoftSplitOptionsTest(unittest.TestCase):
         self.assertTrue(np.all(scores >= min(low, high) - 1e-12) and np.all(scores <= max(low, high) + 1e-12))
         with self.assertRaises(ValueError):
             SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(refine_thresholds=True))
+
+
+class PruneHurdleTest(unittest.TestCase):
+    def test_a_hurdle_in_standard_errors_removes_splits_the_checking_rows_cannot_confirm(self):
+        X, returns, covariance = SoftSplitOptionsTest.step_data(noise=0.02, n=400)
+        loose = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=2, min_samples_leaf=10, validation_fraction=0.25)).fit(X, returns, covariance)
+        strict = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=2, min_samples_leaf=10, validation_fraction=0.25,
+            prune_standard_errors=1e6)).fit(X, returns, covariance)
+        self.assertIsNotNone(loose.root.feature)                          # the clean step survives
+        self.assertIsNone(strict.root.feature)                            # nothing clears an absurd hurdle
+        self.assertTrue(all(record.standard_error >= 0 for record in loose.pruning_log))
+        self.assertTrue(all(not record.kept for record in strict.pruning_log))
+        with self.assertRaises(ValueError):
+            SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(prune_standard_errors=-1))
 
 
 if __name__ == "__main__":

@@ -63,9 +63,16 @@ class Case:
     max_thresholds: int | None = None  # None: every partition is screened
     threshold_quantiles: tuple[float, ...] | None = None  # e.g. (0.25, 0.5, 0.75)
     min_leaf_fraction: float = 0.0  # each child keeps at least this share of its node
-    refine_thresholds: bool = False  # screen every partition around the best quantile too
-    refine_standard_errors: float = 0.0  # hard splits: the refinement must win by this many s.e.
-    smoothing: float = 0.0  # > 0: soft splits (Boltzmann weights over the candidate thresholds)
+    refine_thresholds: bool = (
+        False  # screen every partition around the best quantile too
+    )
+    refine_standard_errors: float = (
+        0.0  # hard splits: the refinement must win by this many s.e.
+    )
+    smoothing: float = (
+        0.0  # > 0: soft splits (Boltzmann weights over the candidate thresholds)
+    )
+    prune_standard_errors: float = 0.0  # pruning: the checking-row gain must exceed this many s.e.
 
     @property
     def mu(self):
@@ -193,8 +200,10 @@ def run_case(case, seed, verbose=False, curve=None):
     X, R, S = rows.X, rows.R, rows.Sigma
     train, test = slice(0, case.n_train), slice(case.n_train, None)
     optimizer = PortfolioOptimizer(
-        2, PortfolioConfig(max_weight=1.0, fee_rate=(case.fee, 0.0),
-                           risk_aversion=case.risk_aversion)
+        2,
+        PortfolioConfig(
+            max_weight=1.0, fee_rate=(case.fee, 0.0), risk_aversion=case.risk_aversion
+        ),
     )
     config = TreeConfig(
         max_depth=case.max_depth,
@@ -205,6 +214,7 @@ def run_case(case, seed, verbose=False, curve=None):
         refine_thresholds=case.refine_thresholds,
         refine_standard_errors=case.refine_standard_errors,
         smoothing=case.smoothing,
+        prune_standard_errors=case.prune_standard_errors,
         validation_fraction=0.25,
         verbose=verbose,
     )

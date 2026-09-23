@@ -7,6 +7,7 @@
                                      thresholds); saves report/figures/recovery_settings.json
   python recovery_figures.py run-enhancements   the split-search options (quantile candidates, refinement,
                                      soft splits); saves report/figures/recovery_enhancements.json
+  python recovery_figures.py run-pruning   the pruning hurdle in standard errors; saves report/figures/recovery_pruning.json
   python recovery_figures.py plot    the figures, from the saved results, into report/figures/
 
 Every cell of the experiment is one trading rate (days between decisions) with
@@ -71,6 +72,19 @@ ENHANCEMENTS = {
                                          "refine_thresholds": True, "smoothing": 1.0},
 }
 ENHANCEMENTS_RESULTS = os.path.join(OUT, "recovery_enhancements.json")
+
+# A fourth experiment: the pruning hurdle, in standard errors of the checking-row regret gain.
+PRUNING = {
+    "base": {},
+    "hurdle 1 s.e.": {"prune_standard_errors": 1.0},
+    "hurdle 2 s.e.": {"prune_standard_errors": 2.0},
+    "deciles + refinement": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10,
+                             "refine_thresholds": True, "refine_standard_errors": 1.0},
+    "deciles + refinement + hurdle 2 s.e.": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10,
+                                             "refine_thresholds": True, "refine_standard_errors": 1.0,
+                                             "prune_standard_errors": 2.0},
+}
+PRUNING_RESULTS = os.path.join(OUT, "recovery_pruning.json")
 
 
 def x_grid(case):
@@ -138,10 +152,14 @@ def settings_tasks():
             for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
 
 
-def enhancement_tasks():
-    return [("enhancements", replace(BASE, step=step, edge=edge, **changes), seed, {"setting": name})
-            for step in SETTING_STEPS for name, changes in ENHANCEMENTS.items()
+def setting_tasks(tag, settings):
+    return [(tag, replace(BASE, step=step, edge=edge, **changes), seed, {"setting": name})
+            for step in SETTING_STEPS for name, changes in settings.items()
             for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
+
+
+def enhancement_tasks():
+    return setting_tasks("enhancements", ENHANCEMENTS)
 
 
 def run(tasks, path):
@@ -233,6 +251,7 @@ def setting_summary(cell, step):
     s["within"] = 100 * float(np.mean(np.abs(first) <= 0.25)) if first else np.nan
     root_spreads = [r["spreads"][0] for r in cell if r.get("spreads") and root_of(r)[0] == "x"]
     s["spread"] = float(np.mean(root_spreads)) if root_spreads else 0.0
+    s["second"] = 100 * float(np.mean([any(d >= 1 for d, _, _ in r["kept"]) for r in cell]))
     return s
 
 
@@ -240,7 +259,7 @@ def print_settings_summary(results, names, title):
     for edge in SETTING_EDGES:
         print(f"\n{title}, edge {edge:g}, {DATASETS_PER_SETTING} datasets per cell")
         print(f"{'setting':>32} {'rate':>14} {'leaves':>6} {'on x':>5} {'none':>5} {'median':>7} "
-              f"{'quartiles':>15} {'<=.25':>5} {'spread':>6} {'tree':>6} {'ideal':>6} {'captured':>9} {'turnover':>14}")
+              f"{'quartiles':>15} {'<=.25':>5} {'spread':>6} {'2nd':>4} {'tree':>6} {'ideal':>6} {'captured':>9} {'turnover':>14}")
         for name in names:
             for step in SETTING_STEPS:
                 cell = setting_records(results, name, step, edge)
@@ -249,11 +268,11 @@ def print_settings_summary(results, names, title):
                 s = setting_summary(cell, step)
                 print(f"{name:>32} {RATE_NAMES[step]:>14} {s['leaves']:>6.2f} {s['on_x']:>5.0f} "
                       f"{s['none']:>5.0f} {s['median']:>+7.2f} {s['quartiles'][0]:>+7.2f}{s['quartiles'][1]:>+8.2f} "
-                      f"{s['within']:>5.0f} {s['spread']:>6.2f} {s['sharpe']['tree']:>6.2f} "
+                      f"{s['within']:>5.0f} {s['spread']:>6.2f} {s['second']:>4.0f} {s['sharpe']['tree']:>6.2f} "
                       f"{s['sharpe']['ideal rule']:>6.2f} {s['captured']:>9.0f} "
                       f"{s['turnover']['tree']:>6.2f} ({s['turnover']['ideal rule']:.2f})")
     print("\nleaves: mean number of leaves kept; <=.25: share of first thresholds within 0.25 of d; "
-          "spread: mean spread of the root split (soft splits); turnover: per decision, tree (ideal rule in brackets).")
+          "spread: mean spread of the root split (soft splits); 2nd: share of datasets with a second-level split; turnover: per decision, tree (ideal rule in brackets).")
 
 
 # ----------------------------------------------------------------------------- figures
@@ -659,6 +678,30 @@ def figure_thresholds_by_setting(results, plt, names, step=5):
     return fig
 
 
+def figure_split_shares(results, plt, names):
+    """Per setting and trading rate: first split on x, no split kept, a second-level split kept (% of datasets)."""
+    fig, axes = plt.subplots(len(SETTING_EDGES), 3, figsize=(12, 3.4 * len(SETTING_EDGES)), sharey=True)
+    keys = [("on_x", "first split on x"), ("none", "no split kept"), ("second", "second-level split kept")]
+    width = 0.8 / len(names)
+    for i, edge in enumerate(SETTING_EDGES):
+        for j, (key, label) in enumerate(keys):
+            axis = axes[i, j]
+            for k, name in enumerate(names):
+                values = [setting_summary(setting_records(results, name, step, edge), step)[key]
+                          if setting_records(results, name, step, edge) else np.nan for step in SETTING_STEPS]
+                axis.bar(np.arange(len(SETTING_STEPS)) + (k - (len(names) - 1) / 2) * width, values, width,
+                         label=name, color=plt.cm.Oranges(0.3 + 0.6 * k / max(1, len(names) - 1)))
+            axis.set_xticks(range(len(SETTING_STEPS)), [RATE_NAMES[s] for s in SETTING_STEPS], fontsize=8)
+            axis.set_title(f"{label} (edge {edge:g})", fontsize=9.5)
+            if j == 0:
+                axis.set_ylabel("% of datasets")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(names), fontsize=8, frameon=False)
+    fig.suptitle(f"What the trees keep ({DATASETS_PER_SETTING} datasets per cell)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.97))
+    return fig
+
+
 def plot():
     import matplotlib
     matplotlib.use("Agg")
@@ -706,6 +749,16 @@ def plot():
             "recovery_enhancements_thresholds": figure_thresholds_by_setting(enhancements, plt, names),
             "recovery_enhancements_maps": figure_settings_maps(enhancements, plt, names,
                                                               title="The enhancements experiment")})
+    if os.path.exists(PRUNING_RESULTS):
+        with open(PRUNING_RESULTS) as handle:
+            pruning = json.load(handle)
+        names = list(PRUNING)
+        print_settings_summary(pruning, names, "pruning experiment")
+        figures.update({
+            "recovery_pruning_splits": figure_split_shares(pruning, plt, names),
+            "recovery_pruning_thresholds": figure_thresholds_by_setting(pruning, plt, names),
+            "recovery_pruning_maps": figure_settings_maps(pruning, plt, names,
+                                                         title="The pruning experiment")})
     for name, fig in figures.items():
         fig.savefig(os.path.join(OUT, name + ".pdf"))
         fig.savefig(os.path.join(OUT, name + ".png"), dpi=130)
@@ -733,6 +786,8 @@ if __name__ == "__main__":
         run(settings_tasks(), SETTINGS_RESULTS)
     elif command == "run-enhancements":
         run(enhancement_tasks(), ENHANCEMENTS_RESULTS)
+    elif command == "run-pruning":
+        run(setting_tasks("pruning", PRUNING), PRUNING_RESULTS)
     elif command == "plot":
         plot()
     else:

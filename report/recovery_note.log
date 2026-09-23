@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.7.15)  23 SEP 2026 11:02
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.7.15)  23 SEP 2026 12:36
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -546,27 +546,35 @@ Package pdftex.def Info: figures/recovery_enhancements_maps.pdf  used on input l
  [18 <./figures/recovery_enhancements_scores.pdf>] [19 <./figures/recovery_enhancements_thresholds.pdf>]
 LaTeX Font Info:    External font `lmex10' loaded for size
 (Font)              <9> on input line 395.
- [20 <./figures/recovery_enhancements_maps.pdf>] [21] (./recovery_note.aux)
+ [20 <./figures/recovery_enhancements_maps.pdf>]
+
+LaTeX Warning: Reference `sec:pruning' on page 21 undefined on input line 437.
+
+[21] [22] (./recovery_note.aux)
  ***********
 LaTeX2e <2026-06-01>
 L3 programming layer <2026-06-18>
  ***********
+
+
+LaTeX Warning: There were undefined references.
+
 Package rerunfilecheck Info: File `recovery_note.out' has not changed.
 (rerunfilecheck)             Checksum: A8E6A0DAFBE1FF74A8ACFB31F7325FB9;3104.
  ) 
 Here is how much of TeX's memory you used:
- 12657 strings out of 469158
- 203731 string characters out of 5459505
+ 12659 strings out of 469158
+ 203751 string characters out of 5459505
  642228 words of memory out of 5000000
- 41411 multiletter control sequences out of 15000+600000
+ 41412 multiletter control sequences out of 15000+600000
  702576 words of font info for 95 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
  74i,13n,79p,854b,564s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmbx10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmbx12.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmex10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi6.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi8.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmmi9.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr12.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr17.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr6.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr7.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr8.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmr9.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmri10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmsy10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmsy8.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmsy9.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/lm/lmtt10.pfb></Users/localpilot/Library/TinyTeX/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on recovery_note.pdf (21 pages, 699287 bytes).
+Output written on recovery_note.pdf (22 pages, 700057 bytes).
 PDF statistics:
- 1218 PDF objects out of 1440 (max. 8388607)
- 431 compressed objects within 5 object streams
- 66 named destinations out of 1000 (max. 500000)
+ 1225 PDF objects out of 1440 (max. 8388607)
+ 436 compressed objects within 5 object streams
+ 67 named destinations out of 1000 (max. 500000)
  175 words of extra memory for PDF output out of 10000 (max. 10000000)
 

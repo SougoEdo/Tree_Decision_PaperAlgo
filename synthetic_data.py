@@ -73,7 +73,9 @@ def moving_average(x, window):
     return np.convolve(x, np.ones(window) / window, mode="valid")
 
 
-def signal_process(x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None, up_volatility_ratio=1.0):
+def signal_process(
+    x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None, up_volatility_ratio=1.0
+):
     """Simulate dS = drift(X)*S*dt + sqrt(variance)*S*dB, starting at s0.
 
     drift(X) is -mu below d, +mu otherwise; mu is a return drift per unit time.
@@ -89,14 +91,18 @@ def signal_process(x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None, up_volatil
     if not np.all(np.isfinite([mu, d, variance, s0, dt])):
         raise ValueError("Parameters must be finite.")
     if mu < 0 or variance < 0 or s0 <= 0 or dt <= 0 or up_volatility_ratio < 0:
-        raise ValueError("Require mu >= 0, variance >= 0, s0 > 0, dt > 0, up_volatility_ratio >= 0.")
+        raise ValueError(
+            "Require mu >= 0, variance >= 0, s0 > 0, dt > 0, up_volatility_ratio >= 0."
+        )
     rng = np.random.default_rng(rng)
     x = np.asarray(x, dtype=float)
     if x.ndim != 1 or len(x) == 0 or not np.all(np.isfinite(x)):
         raise ValueError("Require a nonempty, finite 1D feature series.")
 
     drift = np.where(x[:-1] < d, -mu, mu)
-    sigma = np.where(x[:-1] < d, np.sqrt(variance), up_volatility_ratio * np.sqrt(variance))
+    sigma = np.where(
+        x[:-1] < d, np.sqrt(variance), up_volatility_ratio * np.sqrt(variance)
+    )
     noise = rng.normal(0, np.sqrt(dt) * sigma, size=len(x) - 1)
     log_returns = (drift - 0.5 * sigma**2) * dt + noise
     prices = np.empty(len(x))
@@ -114,10 +120,25 @@ def plot_feature_n_price():
     average = 20
     x = ou_process(mean=0.0, variance=2.0, k=0.01, n_steps=1000, dt=dt, rng=rng)
     x_ma = moving_average(x, window=average)
-    prices = signal_process(x, mu=1e-4, d=s, variance=0.0001, s0=100, dt=dt, rng=123,
-                            up_volatility_ratio=0.5)
+    prices = signal_process(
+        x,
+        mu=1e-4,
+        d=s,
+        variance=0.0001,
+        s0=100,
+        dt=dt,
+        rng=123,
+        up_volatility_ratio=0.5,
+    )
     prices_2 = signal_process(
-        x_ma, mu=1e-4, d=s, variance=0.0001, s0=100, dt=dt, rng=123, up_volatility_ratio=0.5
+        x_ma,
+        mu=1e-4,
+        d=s,
+        variance=0.0001,
+        s0=100,
+        dt=dt,
+        rng=123,
+        up_volatility_ratio=0.5,
     )
     # To pair all three series, use x[average-1:], x_ma, and prices[average-1:].
     time = np.arange(len(x)) * dt

@@ -127,7 +127,7 @@ The search is deterministic (\code{_fit_leaf}): start from the $\omega$-weighted
 At a node with rows $I$ and weights $\omega$ (mass $N=\sum\omega$), the minimum mass of a child is $m_\ast=\max(m,\lceil\varphi N\rceil)$ with $m={}$\code{min_samples_leaf} and $\varphi={}$\code{min_leaf_fraction}. For feature $j$:
 \begin{enumerate}\setlength{\itemsep}{1pt}
 \item[(a)] \textbf{Plain.} The candidates are the midpoints between consecutive distinct values of $x_{tj}$, $t\in I$, whose two sides both carry a mass of at least $m_\ast$. With \code{max_thresholds}${}=M$ set, an evenly spaced subset by rank of size $M$ is kept.
-\item[(b)] \textbf{Quantiles} (\code{threshold_quantiles}${}=(q_1,\dots,q_Q)$). Only the candidates of (a) nearest to the quantiles $q_1,\dots,q_Q$ of the node's values are kept.
+\item[(b)] \textbf{Quantiles} (\code{threshold_quantiles}${}=(q_1,\dots,q_Q)$). Let $\theta_{(1)}<\dots<\theta_{(K)}$ be the admissible candidates of (a). Only the $Q$ candidates at ranks $\mathrm{round}(q_i(K-1))$, $i=1,\dots,Q$, are kept: the quantiles \emph{of the admissible thresholds}, evenly spread over what the leaf minimum allows and never on its boundary. \emph{Why not the quantiles of the values.} The $q$-quantile of the node's values is the threshold that leaves a share $q$ of the rows on the left; the rank rule leaves a share $\varphi^\ast+q(1-2\varphi^\ast)$, where $\varphi^\ast=m_\ast/N$ is the leaf minimum as a share of the node. The two coincide when there is no leaf minimum and differ only at the ends: with deciles and $\varphi^\ast=0.1$ the values' rule puts its outermost candidates on the smallest leaves allowed (10\% of the node), the rank rule 8 points inside (18\%). The rank rule describes the search space itself, whatever the leaf minimum, and composes cleanly with the refinement (its windows stay inside the admissible range) and with the soft splits (whose average runs over candidates evenly spread over that range); the values' rule is recovered by choosing the quantile list accordingly.
 \item[(c)] \textbf{Refinement} (\code{refine_thresholds}). After the screen of (b), let $\theta_\circ$ be the best quantile candidate; every candidate of (a) strictly between the two quantile candidates neighbouring $\theta_\circ$ is screened as well. With plain splits the best of them, $\theta_\bullet$, replaces $\theta_\circ$ only if $Q(\theta_\circ)-Q(\theta_\bullet)>k\,\mathrm{se}\big(Q(\theta_\bullet)-Q(\theta_\circ)\big)$ with $k={}$\code{refine_standard_errors}; with soft splits they simply join the candidate set.
 \end{enumerate}
 \textbf{The screen.} Each candidate $\theta$ is scored cheaply: each child gets its clipped $\omega$-weighted mean return as scores, and
@@ -163,9 +163,9 @@ so that thresholds the data cannot tell apart from the best one (small $z$) shar
 \item[4.] \textbf{Refit on the final holdings.} Refit every leaf with~\eqref{eq:leaf} (fallback: its own vector); keep the new vectors only if the replayed Sharpe ratio does not fall.
 \item[5.] \textbf{Pruning on the checking rows} ($\rho_v>0$), from the bottom of the tree up. For a split node $\nu$: let $\mathcal T$ be the current tree (the split at $\nu$ with every surviving split below it) and $\mathcal T_{\nu\to\mathrm{leaf}}$ the same tree with $\nu$ as a single leaf, its vector fitted with~\eqref{eq:leaf} on the fitting rows of $\nu$ (weights $\omega$), from the holdings of $\mathcal T$ replayed on the fitting rows. Each tree trades the fitting rows, then the checking rows from the holdings it ends with. On the checking rows only,
 \begin{equation}\label{eq:prune}
-\text{the split stays}\iff \overline{\Reg}^{\,\mathrm{chk}}(\mathcal T_{\nu\to\mathrm{leaf}})-\overline{\Reg}^{\,\mathrm{chk}}(\mathcal T)>\varepsilon_R\ \text{ and }\ S^{\mathrm{chk}}(\mathcal T)>S^{\mathrm{chk}}(\mathcal T_{\nu\to\mathrm{leaf}})+\varepsilon_S ,
+\text{the split stays}\iff \bar g>\varepsilon_R\ \text{ and }\ \bar g>k_p\,\mathrm{se}(\bar g)\ \text{ and }\ S^{\mathrm{chk}}(\mathcal T)>S^{\mathrm{chk}}(\mathcal T_{\nu\to\mathrm{leaf}})+\varepsilon_S ,
 \end{equation}
-otherwise $\nu$ becomes that leaf. A split is judged with everything below it; a split no checking row reaches cannot be confirmed.
+where $g_t=\Reg_t(\mathcal T_{\nu\to\mathrm{leaf}})-\Reg_t(\mathcal T)$ is the gain of the split on checking row $t$, $\bar g$ its mean over the checking rows and $\mathrm{se}(\bar g)=\mathrm{std}_t(g_t)/\sqrt{T-T_f}$ its standard error (a paired test, rows treated as independent); otherwise $\nu$ becomes that leaf. With the defaults $\varepsilon_R=10^{-6}$, $\varepsilon_S=0$ and $k_p=0$ (\code{prune_standard_errors}) the test only asks for any improvement, which a split confirmed by a handful of noisy decisions passes; $k_p=2$ asks for an improvement two standard errors above zero. A split is judged with everything below it; a split no checking row reaches cannot be confirmed.
 \item[6.] \textbf{Refit on all training rows.} The rules are settled: all $T$ rows are routed through the pruned tree with~\eqref{eq:membership}, the tree is replayed, every leaf vector is refitted with~\eqref{eq:leaf} on its rows (fitting and checking, fallback its own vector). This refit is always kept, since the vectors it replaces never saw the checking rows. Leaf masses $N_\ell$ then count all training rows.
 \end{enumerate}
 
@@ -188,13 +188,14 @@ Parameter & default & \code{run.py} & note & role\\
 \code{min_samples_leaf} $m$ & 10 & 20 & 20 & minimum rows (mass) per leaf\\
 \code{min_leaf_fraction} $\varphi$ & 0 & 0 & 0 & minimum share of the node's mass per child\\
 \code{max_thresholds} $M$ & 10 & \code{None} & \code{None} & candidates per feature; \code{None} screens all\\
-\code{threshold_quantiles} & \code{None} & \code{None} & \code{None} & quantile candidates only, e.g.\ deciles\\
+\code{threshold_quantiles} & \code{None} & \code{None} & \code{None} & quantile candidates only (by rank among the admissible thresholds), e.g.\ deciles\\
 \code{refine_thresholds} & off & off & off & local refinement around the best quantile\\
 \code{refine_standard_errors} $k$ & 0 & 0 & 0 & hurdle of the refinement for plain splits\\
 \code{smoothing} $\kappa$ & 0 & 0 & 0 & soft splits with Boltzmann weights~\eqref{eq:boltzmann}; 0 = plain\\
 \code{shortlist_size} & 3 & 3 & 3 & screened splits per leaf that get a full fit (plain splits)\\
 \code{min_regret_improvement} $\varepsilon_R$ & $10^{-6}$ & $10^{-6}$ & $10^{-6}$ & gate on $\Delta/N_\ell$ in growth, on the mean checking regret in pruning\\
 \code{min_sharpe_improvement} $\varepsilon_S$ & 0 & 0 & 0 & margin on the Sharpe ratio, in growth and in pruning\\
+\code{prune_standard_errors} $k_p$ & 0 & 0 & 0 & pruning keeps a split only if its checking-row gain exceeds $k_p$ standard errors\\
 \code{validation_fraction} $\rho_v$ & 0 & 0.25 & 0.25 & last share of the training rows that prunes; 0 = no pruning\\
 \code{prediction_bound} $b$ & 0.10 & 0.10 & 0.10 & leaf vectors in $[-b,b]^n$\\
 \code{search_passes}, \code{search_grid_size} & 3, 7 & 3, 7 & 3, 7 & leaf search\\
@@ -209,6 +210,7 @@ Parameter & default & \code{run.py} & note & role\\
 \item \textbf{Sharpe ratio of an all-cash path.} It was NaN, so every comparison ``with split $>$ without'' failed whenever the tree without the split sat in cash, and pruning removed such splits whatever their merit. It is now $0$ (Section~\ref{sec:path}).
 \item \textbf{Leaves carry weights.} Internally a leaf is (node, rows, weights, depth); with plain splits all weights are 1 and nothing changes. Candidate scores in steps~2 and~4 are rebuilt from the leaves rather than updated in place, which keeps the plain case exact.
 \item \textbf{Four options in the split search}, all off by default: quantile candidates with a minimum leaf fraction, local refinement with a standard-error hurdle, and soft splits with Boltzmann weights (Section~\ref{sec:thresholds}). A soft node stores its candidates, their weights and a spread; its reported threshold is the weighted median.
+\item \textbf{A calibrated pruning hurdle}, off by default: the checking-row gain of a split must exceed $k_p$ standard errors (Section~\ref{sec:steps}, step~5); \code{pruning_log} records the standard error of every judged split.
 \item Everything else in the earlier description (decision problem, regret, path, leaf search, growth, pruning, final refit) is unchanged and is restated above.
 \end{itemize}
 \end{document}
