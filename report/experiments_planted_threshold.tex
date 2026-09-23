@@ -108,6 +108,8 @@ datasets per cell & 100 & 50 & 100 at $e\in\{0.05,0.10\}$, 50 at $e=0.02$ and in
 \end{figure}
 
 \section{Protocol}\label{sec:protocol}
+\textbf{Pipeline used.} P2 of \code{model_history.md}: the tree of \code{model_and_training_pipeline.tex} with every option off (plain splits, every threshold screened, depth 2, 20 decisions per leaf, pruning on the last quarter of the training decisions, $\lambda=1$, fee 3 bp), with the Sharpe ratio of an all-cash path defined as 0; market M2 (Section~\ref{sec:world}).
+
 For each cell (a trading rate $h$ with an edge $e$, or with a speed $k$ at $e=0.10$) and each of its $N$ independent datasets: simulate 180 + 3{,}780 + 1{,}260 days; fit the tree on the 15 training years; replay it on the 5 test years, starting from its holdings at the end of training. Four benchmarks are replayed on the same rows with the same optimizer: the \emph{ideal rule} (optimizer fed with $\hat c=(g_h(x),0)$, the best possible use of $x$); the \emph{rule at $d$} (scores $\pm10\%$ according to $x\ge d$); \emph{always the asset}; the \emph{tree without splits} (one leaf, i.e.\ no information). Four measurements:
 \begin{enumerate}\setlength{\itemsep}{1pt}
 \item \textbf{Does it split, and where?} Share of datasets whose first split is on $x$ (with one feature, the alternative is no split); the distribution of the first threshold, whose target is $d=0$ in units of the standard deviation of $x$.
@@ -227,6 +229,8 @@ half-life of $x$ & $h$ & on $x$ & none & median [quartiles] & $|\cdot|\le0.25$ &
 \end{itemize}
 
 \section{The first experiment (18 September): a large drift with decoys}\label{sec:first}
+\textbf{Pipeline used.} P1: the same tree before the all-cash Sharpe convention (an all-cash path had an undefined Sharpe ratio); market M1, with three decoy features next to $x$.
+
 The first run used the same tree, optimizer and price model, but with a step as the time unit and sizes far from markets: $\mu=3\%$ per step for $\sigma=3.2\%$ per step, an edge of about 0.95 instead of 0.02--0.10. It also placed the threshold \emph{below} the mean of $x$ and hid $x$ among decoys. It is kept here because it answers two questions the new run does not: are decoys ignored, and what does the tree find when $d\neq m$?
 \begin{table}[H]
 \centering\small
@@ -280,6 +284,8 @@ data & 443 training decisions (332 grow, 111 prune), 300 test & 100 datasets per
 
 
 \section{A second experiment: risk aversion, fees, depth and quantile thresholds}\label{sec:settings}
+\textbf{Pipeline used.} P2 with $\lambda$, the fee and the depth varied as listed; the ``quartiles'' setting used the quantiles of the node's \emph{values} as candidates, the rule in force on 22 September, not the rank rule of Section~\ref{sec:enhancements}.
+
 \textbf{Why.} The positions of Section~\ref{sec:results} are 0 or 1. With the fee $f$ on the asset and holdings $u$, the optimizer \eqref{eq:opt} gives
 \begin{equation}\label{eq:w}
 w=\frac{\hat c\mp f}{2\lambda\sigma_h^2}\quad\text{clipped to }[0,1],\qquad\text{and } w=u \text{ inside the no-trade zone } |\hat c-2\lambda\sigma_h^2u|\le f,
@@ -367,6 +373,8 @@ quartiles, depth 3 & 2 & 2.3 & 92 & 8 & $+0.06$ & 0.64 & 1.00 & 62\% & 0.12 & 0.
 
 
 \section{A third experiment: quantile candidates, refinement and soft splits}\label{sec:enhancements}
+\textbf{Pipeline used.} P3b: the four split-search options of \code{model_and_training_pipeline.tex} (Section~8 there), the deciles taken by rank among the admissible thresholds; a first run with the deciles of the values (P3) gave the same picture and was replaced by this one.
+
 \textbf{Why.} Sections~\ref{sec:results} and~\ref{sec:settings} showed two sources of error: the threshold moves by $\pm0.1$ to $\pm0.3$ from one dataset to the next, and a split on a handful of decisions occasionally survives pruning. Three options were added to the split search, all off by default (the training document \code{model_and_training_pipeline.tex}, Section~8, gives the exact rules):
 \begin{itemize}\setlength{\itemsep}{1pt}
 \item \emph{Quantile candidates}: only nine candidates are screened, the deciles \emph{by rank} of the admissible thresholds (those leaving at least the leaf minimum on each side), so they are evenly spread over what is allowed and never on its boundary; and every child keeps at least 10\% of its node. (Quantiles of the node's \emph{values} would differ only at the two ends: their outermost candidates sit on the smallest allowed leaves; see \code{model_and_training_pipeline.tex}, Section~8.)
@@ -441,6 +449,8 @@ all three & 2 & 2.0 & 85 & 15 & $+0.05\ [+0.00,+0.12]$ & 85\% & 0.18 & 0.59 & 1.
 
 
 \section{A fourth experiment: a calibrated pruning hurdle}\label{sec:pruning}
+\textbf{Pipeline used.} P3b with \code{prune_standard_errors} set to 1 or 2, alone and on top of deciles with refinement.
+
 \textbf{Why.} Pruning keeps a split if, on the checking decisions, it lowers the mean regret by more than $10^{-6}$ and raises the Sharpe ratio by more than 0. Those hurdles are effectively zero, so a split confirmed by a handful of noisy decisions passes; that is how the spurious second-level leaves of Sections~\ref{sec:results} and~\ref{sec:enhancements} survive. A new option, \code{prune_standard_errors}${}=k_p$, keeps a split only if its checking-row gain $\bar g$ (mean over the checking decisions of the regret without the split minus the regret with it) exceeds $k_p$ standard errors of that mean, a paired test (\code{model_and_training_pipeline.tex}, Section~9, step~5). It was run with $k_p=1$ and $k_p=2$, alone and on top of deciles with refinement, in the world and protocol of Section~\ref{sec:settings} (rates 2, 5, 10 and 21 days, edges 0.05 and 0.10, 40 datasets per cell, $\lambda=1$).
 
 \begin{figure}[H]
@@ -507,6 +517,113 @@ deciles + refinement + hurdle 2 s.e. & 2 & 60 & 40 & 2 & 92\% & 0.48 & 1.00 & 45
 \item \textbf{What to do instead.} The spurious leaves are second-level splits, while the root split is confirmed 92 to 98\% of the time at edge 0.10 without any hurdle. A hurdle applied only below the root (a depth-dependent $k_p$) would remove the noise leaves at no cost to the root split; a larger checking block (40\% instead of 25\%) would raise the power of the test at the cost of growth data. Both are cheap to test. Until then, $k_p=0$ stays the default, and the spurious leaves are better limited by the minimum leaf fraction of Section~\ref{sec:enhancements}.
 \end{itemize}
 
+
+\section{A fifth experiment: the resolution of the threshold against noise}\label{sec:resolution}
+\textbf{Pipeline used.} P3b with every option off, identical to P2; market M2 with observation noise on the feature (M2').
+
+\textbf{Why.} Sections~\ref{sec:results} to~\ref{sec:pruning} fixed the noise: a volatility of 1\% a day and a feature observed exactly. Two questions remain about what the tree can resolve. How far can the price volatility rise, at a fixed drift, before the two regimes can no longer be told apart? And how much observation noise on the feature can the threshold survive? The second is not a question about the variance of $x$: the tree only sees the ordering of $x$, so scaling $x$ changes nothing; what blurs a feature is noise \emph{added} to it, $x^{\mathrm{obs}}_t=x_t+\tau\varepsilon_t$ with $\varepsilon_t$ white, the price still following the true $x_t$. Two sweeps, at weekly and monthly decisions, 60 datasets per point:
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item the price volatility from 0.4\% to 4\% a day at a fixed regime drift of $\pm25\%$ a year, so the edge $e=\mu/\sigma$ runs from 0.25 down to 0.025;
+\item the observation noise $\tau$ from 0 to 2 standard deviations of $x$, at the base volatility.
+\end{itemize}
+With a noisy feature the tree sees $x^{\mathrm{obs}}$, and so does the ideal rule: it is fed with the expected return given the \emph{observed} value, $\E[g_h(x)\mid x^{\mathrm{obs}}]$, computed by drawing the true $x$ from its Gaussian posterior (the true value shrinks towards the mean by $s^2/(s^2+\tau^2)$). The threshold to find stays $d=0$ by symmetry.
+
+\begin{figure}[H]
+\centering\includegraphics[width=\linewidth]{resolution_curves}
+\caption{\emph{Top:} the price volatility sweep (the edge in brackets); \emph{bottom:} the observation-noise sweep. From left to right: datasets whose first split is on $x$; distance of the first threshold to $d$ (median and quartiles over the datasets that split); annualized test Sharpe ratio of the tree (solid) and of the ideal rule (dashed); share of the ideal rule's gain captured. Orange: weekly decisions; blue: monthly.}
+\label{fig:resolution}
+\end{figure}
+
+\begin{table}[H]
+\centering\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}l r r rr r rr r@{}}
+\toprule
+& & & \multicolumn{2}{c}{splits (\%)} & first threshold & \multicolumn{2}{c}{annual.\ Sharpe} & gain\\
+\cmidrule(lr){4-5}\cmidrule(lr){7-8}
+sweep & value & edge & on $x$ & none & $|\theta|$: median [quartiles] & tree & ideal & captured\\
+\midrule
+volatility, weekly & 0.4\% & 0.25 & 92 & 8 & $0.05\ [0.02, 0.08]$ & 1.85 & 2.10 & 85\%\\
+ & 0.6\% & 0.17 & 97 & 3 & $0.07\ [0.03, 0.13]$ & 1.25 & 1.44 & 85\%\\
+ & 0.8\% & 0.125 & 95 & 5 & $0.09\ [0.04, 0.17]$ & 0.87 & 1.08 & 77\%\\
+ & 1.0\% & 0.10 & 93 & 7 & $0.12\ [0.06, 0.22]$ & 0.69 & 0.87 & 76\%\\
+ & 1.5\% & 0.067 & 82 & 18 & $0.19\ [0.07, 0.45]$ & 0.35 & 0.58 & 55\%\\
+ & 2.0\% & 0.05 & 75 & 25 & $0.39\ [0.14, 0.62]$ & 0.23 & 0.42 & 47\%\\
+ & 3.0\% & 0.033 & 62 & 38 & $0.83\ [0.37, 1.24]$ & 0.03 & 0.26 & 42\%\\
+ & 4.0\% & 0.025 & 45 & 55 & $0.95\ [0.53, 1.52]$ & $-0.05$ & 0.18 & 31\%\\
+\midrule
+volatility, monthly & 0.4\% & 0.25 & 95 & 5 & $0.12\ [0.06, 0.23]$ & 1.29 & 1.36 & 93\%\\
+ & 0.6\% & 0.17 & 92 & 8 & $0.12\ [0.06, 0.25]$ & 0.93 & 1.01 & 90\%\\
+ & 0.8\% & 0.125 & 88 & 12 & $0.12\ [0.06, 0.26]$ & 0.68 & 0.80 & 83\%\\
+ & 1.0\% & 0.10 & 80 & 20 & $0.23\ [0.09, 0.31]$ & 0.51 & 0.66 & 73\%\\
+ & 1.5\% & 0.067 & 78 & 22 & $0.29\ [0.16, 0.45]$ & 0.29 & 0.45 & 55\%\\
+ & 2.0\% & 0.05 & 70 & 30 & $0.38\ [0.25, 0.72]$ & 0.13 & 0.33 & 38\%\\
+ & 3.0\% & 0.033 & 62 & 38 & $0.55\ [0.25, 0.90]$ & 0.00 & 0.20 & 19\%\\
+ & 4.0\% & 0.025 & 45 & 55 & $0.42\ [0.22, 0.99]$ & $-0.06$ & 0.13 & $-25$\%\\
+\midrule
+noise $\tau$, weekly & 0 & 0.10 & 93 & 7 & $0.12\ [0.06, 0.22]$ & 0.69 & 0.87 & 76\%\\
+ & 0.1 & 0.10 & 95 & 5 & $0.12\ [0.07, 0.18]$ & 0.74 & 0.86 & 83\%\\
+ & 0.25 & 0.10 & 95 & 5 & $0.19\ [0.08, 0.29]$ & 0.66 & 0.79 & 79\%\\
+ & 0.5 & 0.10 & 87 & 13 & $0.25\ [0.20, 0.42]$ & 0.45 & 0.66 & 65\%\\
+ & 0.75 & 0.10 & 82 & 18 & $0.41\ [0.16, 0.63]$ & 0.32 & 0.57 & 56\%\\
+ & 1 & 0.10 & 77 & 23 & $0.55\ [0.40, 0.87]$ & 0.26 & 0.48 & 53\%\\
+ & 1.5 & 0.10 & 73 & 27 & $0.85\ [0.47, 1.27]$ & 0.18 & 0.35 & 41\%\\
+ & 2 & 0.10 & 68 & 32 & $1.15\ [0.67, 1.79]$ & 0.09 & 0.29 & 12\%\\
+\midrule
+noise $\tau$, monthly & 0 & 0.10 & 80 & 20 & $0.23\ [0.09, 0.31]$ & 0.51 & 0.66 & 73\%\\
+ & 0.1 & 0.10 & 87 & 13 & $0.25\ [0.14, 0.35]$ & 0.51 & 0.67 & 72\%\\
+ & 0.25 & 0.10 & 82 & 18 & $0.24\ [0.10, 0.45]$ & 0.45 & 0.65 & 66\%\\
+ & 0.5 & 0.10 & 87 & 13 & $0.38\ [0.14, 0.65]$ & 0.41 & 0.57 & 67\%\\
+ & 0.75 & 0.10 & 80 & 20 & $0.51\ [0.30, 0.92]$ & 0.33 & 0.48 & 69\%\\
+ & 1 & 0.10 & 77 & 23 & $0.57\ [0.31, 0.88]$ & 0.28 & 0.41 & 70\%\\
+ & 1.5 & 0.10 & 70 & 30 & $0.61\ [0.31, 1.24]$ & 0.19 & 0.31 & 64\%\\
+ & 2 & 0.10 & 63 & 37 & $0.91\ [0.47, 1.65]$ & 0.16 & 0.24 & 59\%\\
+\bottomrule
+\end{tabular}
+\caption{The resolution sweeps, 60 datasets per row. The volatility sweep keeps the drift at $\pm25\%$ a year, so the edge $e=\mu/\sigma$ falls as the volatility rises; the noise sweep keeps the base volatility and adds white noise of standard deviation $\tau$ to the observed feature ($x$ has standard deviation 1). ``Ideal'' is the optimizer fed with the expected return given the observed feature; its own Sharpe ratio falls with the noise because the observed feature carries less information.}
+\label{tab:resolution}
+\end{table}
+
+\textbf{Reading the figure and the table.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{The threshold error grows like one over the edge, then breaks.} At weekly decisions the median distance to $d$ is 0.05, 0.09, 0.12 and 0.19 standard deviations of $x$ for edges 0.25, 0.125, 0.10 and 0.067 (about $0.012/e$), then 0.39 at 0.05 and 0.83 at 0.033: below an edge of about 0.05 the split is no longer located, it is guessed. The share of datasets that split follows the same break (93\% at 0.10, 75\% at 0.05, 45\% at 0.025), and so does the gain captured (76\%, 47\%, 31\%).
+\item \textbf{Monthly decisions resolve less} (0.12 to 0.23 at the same edges, and 45\% found at the largest volatility as well) but capture a comparable share of a smaller ideal gain; at a volatility of 4\% a day the monthly tree earns less than no split at all.
+\item \textbf{Observation noise acts like a smaller edge.} Noise of $\tau$ standard deviations shrinks the information in the observed feature by $1/(1+\tau^2)$, and the curves agree with that: $\tau=1$ at edge 0.10 gives 77\% found, an error of 0.55 and 53\% of the gain, the same picture as an edge of 0.05 without noise (75\%, 0.39, 47\%). Up to $\tau=0.25$ nothing is lost (error 0.19, 79\% of the gain); at $\tau=0.5$ the error doubles and the captured share falls to 65\%; at $\tau=2$ the tree keeps 12\% of what is left.
+\item \textbf{The ideal rule degrades too}: with a noisy feature the best possible Sharpe ratio falls from 0.87 to 0.29 at $\tau=2$. The tree's loss relative to it (0.18 to 0.20 of Sharpe at every noise level up to $\tau=1$) is roughly constant: noise removes information from everybody, and the tree's own estimation error stays what it was.
+\item \textbf{Practical reading.} For a regime feature to be worth a weekly tree, the drift-to-volatility ratio per day should be at least about 0.07 (a regime drift of $\pm17\%$ a year at 1\% daily volatility) and the feature should be observed with noise below a quarter of its own spread; a feature twice as noisy as that halves the attainable gain before the tree even starts.
+\end{itemize}
+
+
+\section{A sixth experiment: sharper smoothing weights and the hurdle below the root}\label{sec:options2}
+\textbf{Pipeline used.} P4 of \code{model_history.md}: P3b plus two options, the Gaussian form of the soft-split weights (\code{smoothing_kernel}) and a pruning hurdle restricted to splits at or below a given depth (\code{prune_hurdle_from_depth}); market M2.
+
+\textbf{Why.} Section~\ref{sec:enhancements} found the soft splits too wide at $\kappa=1$ (a spread of 0.65 standard deviations, and scores pushed into the optimizer's no-trade band), and Section~\ref{sec:pruning} found the pruning hurdle removing the true root splits along with the spurious second-level leaves. Two remedies are tested here, each alone and on top of deciles with refinement: sharper weights, $\kappa=0.5$ and $0.25$ with the Laplace form and $\kappa=1$ with the Gaussian form; and the hurdle of 2 standard errors applied only below the root, where the noise leaves live, the root split being judged by the plain rule. Same world and protocol as Section~\ref{sec:settings} (rates 2, 5, 10 and 21 days, edges 0.05 and 0.10, 40 datasets per cell, $\lambda=1$).
+
+\begin{figure}[H]
+\centering\includegraphics[width=0.9\linewidth]{split_options_2_scores}
+\caption{Weekly decisions, edge 0.10: the score the tree gives the asset as a function of $x$ (median over the 40 datasets, quartiles as a band), one panel per setting.}
+\label{fig:options2-scores}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.9\linewidth]{split_options_2_splits}
+\caption{What the trees keep, by setting and trading rate: first split on $x$, no split kept, a second-level split kept (\% of the datasets). \emph{Top:} edge 0.05; \emph{bottom:} edge 0.10.}
+\label{fig:options2-splits}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.95\linewidth]{split_options_2_maps}
+\caption{Edge 0.10, rows: trading rate, columns: setting. Share of the ideal rule's test gain captured; annualized test Sharpe ratio (ideal rule in brackets); mean number of leaves; turnover per decision (ideal rule in brackets).}
+\label{fig:options2-maps}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.9\linewidth]{split_options_2_thresholds}
+\caption{Weekly decisions: where the first threshold lands, one row per setting; \emph{left:} edge 0.05, \emph{right:} edge 0.10.}
+\label{fig:options2-thresholds}
+\end{figure}
+
+%% OPTIONS2-RESULTS-START
+(filled from the run)
+%% OPTIONS2-RESULTS-END
+
 \section{How to reproduce}
 The code is in \code{code/} (run the commands below from that folder, with the project's Python, \code{../.venv/bin/python}); results and figures are in \code{report/figures/}. The results were produced with \code{synthetic_market.py} as committed in \code{eae145c} (one volatility for both regimes).
 \begin{itemize}\raggedright\setlength{\itemsep}{1pt}
@@ -517,6 +634,8 @@ The code is in \code{code/} (run the commands below from that folder, with the p
 \item \code{python planted_threshold_experiments.py} \code{run-settings}: the settings experiment of Section~\ref{sec:settings}, 1{,}920 fits, 54 minutes; writes \code{results_risk_fee_depth.json}, which \code{plot} then turns into Figures~\ref{fig:positions}--\ref{fig:settings-maps} and Table~\ref{tab:settings}.
 \item \code{python planted_threshold_experiments.py} \code{run-enhancements}: the split-search options of Section~\ref{sec:enhancements}, 1{,}600 fits, 35 minutes; writes \code{results_split_options.json}, drawn by \code{plot} as Figures~\ref{fig:scores}--\ref{fig:enh-maps} and Table~\ref{tab:enhancements}.
 \item \code{python planted_threshold_experiments.py} \code{run-pruning}: the pruning hurdle of Section~\ref{sec:pruning}, 1{,}600 fits, 30 minutes; writes \code{results_pruning_hurdle.json}, drawn by \code{plot} as Figures~\ref{fig:pruning-splits}--\ref{fig:pruning-thresholds} and Table~\ref{tab:pruning}.
+\item \code{python planted_threshold_experiments.py} \code{run-resolution}: the resolution sweeps of Section~\ref{sec:resolution}, 1{,}920 fits; writes \code{results_resolution.json}, drawn by \code{plot} as Figure~\ref{fig:resolution}.
+\item \code{python planted_threshold_experiments.py} \code{run-options}: the sharper smoothing weights and the hurdle below the root of Section~\ref{sec:options2}, 2{,}240 fits; writes \code{results_split_options_2.json}, drawn by \code{plot} as Figures~\ref{fig:options2-scores}--\ref{fig:options2-thresholds}.
 \item \code{report/model_and_training_pipeline.tex}: the model and its training, step by step, with the equations of every option.
 \end{itemize}
 \end{document}

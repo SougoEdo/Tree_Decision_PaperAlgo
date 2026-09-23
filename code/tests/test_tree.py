@@ -495,5 +495,27 @@ class PruneHurdleTest(unittest.TestCase):
             SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(prune_standard_errors=-1))
 
 
+class KernelAndHurdleDepthTest(unittest.TestCase):
+    def test_a_gaussian_kernel_concentrates_the_weights_more_than_laplace(self):
+        X, returns, covariance = SoftSplitOptionsTest.step_data(noise=0.03, n=400)
+        laplace = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, smoothing=1.0)).fit(X, returns, covariance)
+        gaussian = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, smoothing=1.0, smoothing_kernel="gaussian")).fit(X, returns, covariance)
+        self.assertLess(gaussian.root.spread, laplace.root.spread + 1e-12)
+        with self.assertRaises(ValueError):
+            SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(smoothing_kernel="cauchy"))
+
+    def test_the_hurdle_can_spare_the_root(self):
+        X, returns, covariance = SoftSplitOptionsTest.step_data(noise=0.02, n=400)
+        everywhere = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, validation_fraction=0.25, prune_standard_errors=1e6)).fit(X, returns, covariance)
+        below_root = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, validation_fraction=0.25, prune_standard_errors=1e6,
+            prune_hurdle_from_depth=1)).fit(X, returns, covariance)
+        self.assertIsNone(everywhere.root.feature)                        # the absurd hurdle removes the root split
+        self.assertIsNotNone(below_root.root.feature)                     # spared: the root is judged by the plain rule
+
+
 if __name__ == "__main__":
     unittest.main()

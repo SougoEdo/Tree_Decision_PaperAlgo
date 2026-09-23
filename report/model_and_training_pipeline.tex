@@ -143,9 +143,9 @@ and likewise on the right. The standard error of a difference of two such sums i
 \textbf{Soft splits} (\code{smoothing}${}=\kappa>0$). For each feature, all its candidates $\theta_1<\dots<\theta_K$ are kept together with Boltzmann weights
 \begin{equation}\label{eq:boltzmann}
 z_k=\frac{Q(\theta_k)-\min_lQ(\theta_l)}{\mathrm{se}\big(Q(\theta_k)-\min_lQ(\theta_l)\big)},\qquad
-\pi_k=\frac{e^{-z_k/\kappa}}{\sum_le^{-z_l/\kappa}},
+\pi_k=\frac{w(z_k/\kappa)}{\sum_lw(z_l/\kappa)},\qquad w(u)=e^{-u}\ \text{or}\ e^{-u^2/2},
 \end{equation}
-so that thresholds the data cannot tell apart from the best one (small $z$) share the weight and clearly worse ones get none ($z_k=0$ when the regrets are identical, $\infty$ when they differ with zero standard error). The feature yields one candidate split, ranked by its best $Q$; its children receive the rows with $\mu>0$ on the left with weights $\omega\mu$ and the rows with $\mu<1$ on the right with weights $\omega(1-\mu)$, by~\eqref{eq:membership}. As $\kappa\to0$ the weight concentrates on the best candidate and the split is the plain one.
+the Laplace form $e^{-u}$ by default and the Gaussian form with \code{smoothing_kernel="gaussian"} (at $\kappa=1$ the two agree at $z=2$, but the Gaussian form keeps more of the weight within one standard error of the best, 0.61 against 0.37, and cuts the tail beyond two, 0.01 against 0.05 at $z=3$), so that thresholds the data cannot tell apart from the best one (small $z$) share the weight and clearly worse ones get none ($z_k=0$ when the regrets are identical, $\infty$ when they differ with zero standard error). The feature yields one candidate split, ranked by its best $Q$; its children receive the rows with $\mu>0$ on the left with weights $\omega\mu$ and the rows with $\mu<1$ on the right with weights $\omega(1-\mu)$, by~\eqref{eq:membership}. As $\kappa\to0$ the weight concentrates on the best candidate and the split is the plain one.
 
 \section{Training, step by step}\label{sec:steps}
 \textbf{Algorithm} (\code{fit}). Steps 0 to 4 see the fitting rows only.
@@ -166,7 +166,7 @@ so that thresholds the data cannot tell apart from the best one (small $z$) shar
 \begin{equation}\label{eq:prune}
 \text{the split stays}\iff \bar g>\varepsilon_R\ \text{ and }\ \bar g>k_p\,\mathrm{se}(\bar g)\ \text{ and }\ S^{\mathrm{chk}}(\mathcal T)>S^{\mathrm{chk}}(\mathcal T_{\nu\to\mathrm{leaf}})+\varepsilon_S ,
 \end{equation}
-where $g_t=\Reg_t(\mathcal T_{\nu\to\mathrm{leaf}})-\Reg_t(\mathcal T)$ is the gain of the split on checking row $t$, $\bar g$ its mean over the checking rows and $\mathrm{se}(\bar g)=\mathrm{std}_t(g_t)/\sqrt{T-T_f}$ its standard error (a paired test, rows treated as independent); otherwise $\nu$ becomes that leaf. With the defaults $\varepsilon_R=10^{-6}$, $\varepsilon_S=0$ and $k_p=0$ (\code{prune_standard_errors}) the test only asks for any improvement, which a split confirmed by a handful of noisy decisions passes; $k_p=2$ asks for an improvement two standard errors above zero. A split is judged with everything below it; a split no checking row reaches cannot be confirmed.
+where $g_t=\Reg_t(\mathcal T_{\nu\to\mathrm{leaf}})-\Reg_t(\mathcal T)$ is the gain of the split on checking row $t$, $\bar g$ its mean over the checking rows and $\mathrm{se}(\bar g)=\mathrm{std}_t(g_t)/\sqrt{T-T_f}$ its standard error (a paired test, rows treated as independent); otherwise $\nu$ becomes that leaf. With the defaults $\varepsilon_R=10^{-6}$, $\varepsilon_S=0$ and $k_p=0$ (\code{prune_standard_errors}) the test only asks for any improvement, which a split confirmed by a handful of noisy decisions passes; $k_p=2$ asks for an improvement two standard errors above zero. With \code{prune_hurdle_from_depth}${}=D_p$ the hurdle $k_p\,\mathrm{se}(\bar g)$ applies only to splits at depth $D_p$ or below, and the splits above it are judged by the plain rule; $D_p=1$ spares the root split, which is rarely spurious, and targets the second-level leaves, where the noise splits live. A split is judged with everything below it; a split no checking row reaches cannot be confirmed.
 \item[6.] \textbf{Refit on all training rows.} The rules are settled: all $T$ rows are routed through the pruned tree with~\eqref{eq:membership}, the tree is replayed, every leaf vector is refitted with~\eqref{eq:leaf} on its rows (fitting and checking, fallback its own vector). This refit is always kept, since the vectors it replaces never saw the checking rows. Leaf masses $N_\ell$ then count all training rows.
 \end{enumerate}
 
@@ -197,6 +197,8 @@ Parameter & default & \code{run_real_data.py} & note & role\\
 \code{min_regret_improvement} $\varepsilon_R$ & $10^{-6}$ & $10^{-6}$ & $10^{-6}$ & gate on $\Delta/N_\ell$ in growth, on the mean checking regret in pruning\\
 \code{min_sharpe_improvement} $\varepsilon_S$ & 0 & 0 & 0 & margin on the Sharpe ratio, in growth and in pruning\\
 \code{prune_standard_errors} $k_p$ & 0 & 0 & 0 & pruning keeps a split only if its checking-row gain exceeds $k_p$ standard errors\\
+\code{prune_hurdle_from_depth} $D_p$ & 0 & 0 & 0 & the hurdle applies to splits at depth $D_p$ or below only\\
+\code{smoothing_kernel} & laplace & laplace & laplace & form of the soft-split weights, $e^{-u}$ or $e^{-u^2/2}$\\
 \code{validation_fraction} $\rho_v$ & 0 & 0.25 & 0.25 & last share of the training rows that prunes; 0 = no pruning\\
 \code{prediction_bound} $b$ & 0.10 & 0.10 & 0.10 & leaf vectors in $[-b,b]^n$\\
 \code{search_passes}, \code{search_grid_size} & 3, 7 & 3, 7 & 3, 7 & leaf search\\
@@ -211,7 +213,7 @@ Parameter & default & \code{run_real_data.py} & note & role\\
 \item \textbf{Sharpe ratio of an all-cash path.} It was NaN, so every comparison ``with split $>$ without'' failed whenever the tree without the split sat in cash, and pruning removed such splits whatever their merit. It is now $0$ (Section~\ref{sec:path}).
 \item \textbf{Leaves carry weights.} Internally a leaf is (node, rows, weights, depth); with plain splits all weights are 1 and nothing changes. Candidate scores in steps~2 and~4 are rebuilt from the leaves rather than updated in place, which keeps the plain case exact.
 \item \textbf{Four options in the split search}, all off by default: quantile candidates with a minimum leaf fraction, local refinement with a standard-error hurdle, and soft splits with Boltzmann weights (Section~\ref{sec:thresholds}). A soft node stores its candidates, their weights and a spread; its reported threshold is the weighted median.
-\item \textbf{A calibrated pruning hurdle}, off by default: the checking-row gain of a split must exceed $k_p$ standard errors (Section~\ref{sec:steps}, step~5); \code{pruning_log} records the standard error of every judged split.
+\item \textbf{A calibrated pruning hurdle}, off by default: the checking-row gain of a split must exceed $k_p$ standard errors (Section~\ref{sec:steps}, step~5); \code{pruning_log} records the standard error of every judged split. Since 23 September (evening), the hurdle can be restricted to splits at or below a given depth (\code{prune_hurdle_from_depth}), and the soft-split weights can take the Gaussian form (\code{smoothing_kernel}); this is version P4 of \code{model_history.md}.
 \item Everything else (decision problem, regret, path, leaf search, growth, pruning, final refit) is unchanged since the first version and is described above.
 \end{itemize}
 \end{document}

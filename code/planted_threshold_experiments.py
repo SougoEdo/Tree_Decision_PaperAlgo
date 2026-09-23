@@ -8,6 +8,12 @@
   python planted_threshold_experiments.py run-enhancements   the split-search options (quantile candidates, refinement,
                                      soft splits); saves report/figures/results_split_options.json
   python planted_threshold_experiments.py run-pruning   the pruning hurdle in standard errors; saves report/figures/results_pruning_hurdle.json
+  python planted_threshold_experiments.py run-options   sharper smoothing weights and the pruning hurdle below the root;
+                                     saves report/figures/results_split_options_2.json
+  python planted_threshold_experiments.py run-resolution   the threshold against price volatility and feature noise;
+                                     saves report/figures/results_resolution.json
+  python planted_threshold_experiments.py run-regime   the regime-dependent volatility model (its own report);
+                                     saves report/figures/results_regime_volatility.json
   python planted_threshold_experiments.py plot    the figures, from the saved results, into report/figures/
 
 Every cell of the experiment is one trading rate (days between decisions) with
@@ -86,6 +92,44 @@ PRUNING = {
 }
 PRUNING_RESULTS = os.path.join(OUT, "results_pruning_hurdle.json")
 
+# A seventh experiment: sharper smoothing weights and the pruning hurdle below the root only.
+OPTIONS2 = {
+    "base": {},
+    "smoothing κ = 0.5": {"smoothing": 0.5},
+    "smoothing κ = 0.25": {"smoothing": 0.25},
+    "gaussian smoothing κ = 1": {"smoothing": 1.0, "smoothing_kernel": "gaussian"},
+    "hurdle 2 s.e. below the root": {"prune_standard_errors": 2.0, "prune_hurdle_from_depth": 1},
+    "deciles + refinement + smoothing κ = 0.25": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10,
+                                                 "refine_thresholds": True, "smoothing": 0.25},
+    "deciles + refinement + hurdle below the root": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10,
+                                                    "refine_thresholds": True, "refine_standard_errors": 1.0,
+                                                    "prune_standard_errors": 2.0, "prune_hurdle_from_depth": 1},
+}
+OPTIONS2_STEPS = SETTING_STEPS                  # every trading rate, as in the other option experiments
+OPTIONS2_RESULTS = os.path.join(OUT, "results_split_options_2.json")
+
+# A fifth experiment: the resolution of the threshold against the price volatility (at a fixed
+# drift of +-25% a year) and against observation noise on the feature (x has standard deviation 1).
+RESOLUTION_STEPS = [5, 21]
+RESOLUTION_VOLATILITIES = [0.004, 0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.04]   # per day
+RESOLUTION_NOISES = [0.0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+DATASETS_PER_RESOLUTION = 60
+RESOLUTION_RESULTS = os.path.join(OUT, "results_resolution.json")
+
+# A sixth experiment, its own report: the price volatility also follows a threshold on x.
+REGIME = {
+    "constant volatility, λ = 1": {},
+    "constant volatility, λ = 10": {"risk_aversion": 10.0},
+    "volatility threshold at d, λ = 1": {"up_volatility_ratio": 0.5},
+    "volatility threshold at d, λ = 10": {"up_volatility_ratio": 0.5, "risk_aversion": 10.0},
+    "volatility threshold at d + 1, λ = 1": {"up_volatility_ratio": 0.5, "volatility_threshold": 1.0},
+    "volatility threshold at d + 1, λ = 10": {"up_volatility_ratio": 0.5, "volatility_threshold": 1.0,
+                                             "risk_aversion": 10.0},
+    "volatility threshold at d + 1, λ = 10, 20-day covariance": {
+        "up_volatility_ratio": 0.5, "volatility_threshold": 1.0, "risk_aversion": 10.0, "window": 20},
+}
+REGIME_RESULTS = os.path.join(OUT, "results_regime_volatility.json")
+
 
 def x_grid(case):
     std = np.sqrt(case.feature_variance)
@@ -93,16 +137,16 @@ def x_grid(case):
 
 
 @lru_cache(maxsize=None)
-def curve_of(k, feature_variance, edge, volatility, d, mean, step):
+def curve_of(k, feature_variance, edge, volatility, d, mean, step, feature_noise=0.0):
     case = replace(BASE, k=k, feature_variance=feature_variance, edge=edge,
-                   volatility=volatility, d=d, mean=mean, step=step)
+                   volatility=volatility, d=d, mean=mean, step=step, feature_noise=feature_noise)
     grid = x_grid(case)
     return grid, expected_return_curve(case, grid, n_paths=10000)
 
 
 def curve(case):
     return curve_of(case.k, case.feature_variance, case.edge, case.volatility,
-                    case.d, case.mean, case.step)
+                    case.d, case.mean, case.step, case.feature_noise)
 
 
 def position_profile(x, weights):
@@ -121,6 +165,9 @@ def job(task):
     return {
         "tag": tag, "step": case.step, "edge": case.edge, "k": case.k,
         "volatility": case.volatility, "seed": seed, "sign_change": sign_change(grid, expected),
+        "feature_noise": case.feature_noise, "up_volatility_ratio": case.up_volatility_ratio,
+        "volatility_threshold": case.volatility_threshold, "risk_aversion": case.risk_aversion,
+        "window": case.window,
         "grown": result["grown"], "kept": result["kept"], "n_leaves": len(result["kept"]) + 1,
         "spreads": result["spreads"],
         "score_profile": [float(v) for v in result["tree"].predict_returns(SCORE_GRID[:, None])[:, 0]],
@@ -128,7 +175,7 @@ def job(task):
         "test_sharpe": {name: float(path.sharpe) for name, path in paths.items()},
         "test_turnover": {name: float(path.turnover.mean()) for name, path in paths.items()},
         "profile": {name: position_profile(x_test, paths[name].weights[:, 0])
-                    for name in ("tree", "ideal rule")},
+                    for name in ("tree", "ideal rule", "ideal rule, true variance")},
         **extra,
     }
 
@@ -152,14 +199,29 @@ def settings_tasks():
             for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
 
 
-def setting_tasks(tag, settings):
+def setting_tasks(tag, settings, steps=SETTING_STEPS):
     return [(tag, replace(BASE, step=step, edge=edge, **changes), seed, {"setting": name})
-            for step in SETTING_STEPS for name, changes in settings.items()
+            for step in steps for name, changes in settings.items()
             for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
 
 
 def enhancement_tasks():
     return setting_tasks("enhancements", ENHANCEMENTS)
+
+
+def resolution_tasks():
+    mu = BASE.mu                                # the drift stays at +-25% a year
+    tasks = []
+    for step in RESOLUTION_STEPS:
+        for volatility in RESOLUTION_VOLATILITIES:
+            case = replace(BASE, step=step, volatility=volatility, edge=mu / volatility)
+            tasks += [("resolution", case, seed, {"axis": "volatility", "value": volatility})
+                      for seed in range(DATASETS_PER_RESOLUTION)]
+        for noise in RESOLUTION_NOISES:
+            case = replace(BASE, step=step, feature_noise=noise)
+            tasks += [("resolution", case, seed, {"axis": "noise", "value": noise})
+                      for seed in range(DATASETS_PER_RESOLUTION)]
+    return tasks
 
 
 def run(tasks, path):
@@ -255,13 +317,29 @@ def setting_summary(cell, step):
     return s
 
 
-def print_settings_summary(results, names, title):
+def print_resolution_summary(results):
+    for axis_name in ("volatility", "noise"):
+        print(f"\nresolution experiment, {axis_name} sweep, {DATASETS_PER_RESOLUTION} datasets per point")
+        print(f"{'value':>8} {'edge':>6} {'rate':>8} {'on x':>5} {'none':>5} {'median |th|':>11} {'quartiles':>15} "
+              f"{'tree':>6} {'ideal':>6} {'true var':>8} {'captured':>9}")
+        for step in RESOLUTION_STEPS:
+            for value, cell in resolution_cells(results, axis_name, step).items():
+                s = cell_summary(cell, step)
+                first = np.abs([th for r in cell for f, th in [root_of(r)] if f == "x"])
+                q = np.percentile(first, [25, 50, 75]) if len(first) else [np.nan] * 3
+                true_var = float(np.nanmean([r["test_sharpe"]["ideal rule, true variance"] for r in cell])) * np.sqrt(DAYS_PER_YEAR / step)
+                print(f"{value:>8.3g} {cell[0]['edge']:>6.3g} {RATE_NAMES[step]:>8} {s['on_x']:>5.0f} {s['none']:>5.0f} "
+                      f"{q[1]:>11.2f} {q[0]:>7.2f}{q[2]:>8.2f} {s['sharpe']['tree']:>6.2f} "
+                      f"{s['sharpe']['ideal rule']:>6.2f} {true_var:>8.2f} {s['captured']:>9.0f}")
+
+
+def print_settings_summary(results, names, title, steps=SETTING_STEPS):
     for edge in SETTING_EDGES:
         print(f"\n{title}, edge {edge:g}, {DATASETS_PER_SETTING} datasets per cell")
         print(f"{'setting':>32} {'rate':>14} {'leaves':>6} {'on x':>5} {'none':>5} {'median':>7} "
               f"{'quartiles':>15} {'<=.25':>5} {'spread':>6} {'2nd':>4} {'tree':>6} {'ideal':>6} {'captured':>9} {'turnover':>14}")
         for name in names:
-            for step in SETTING_STEPS:
+            for step in steps:
                 cell = setting_records(results, name, step, edge)
                 if not cell:
                     continue
@@ -319,7 +397,7 @@ def binned_means(x, r, n_bins=16):
 
 def figure_world(result, plt):
     case = result["case"]
-    x, prices = result["series"]
+    x, observed, prices = result["series"]
     days = np.arange(case.window, case.window + 2 * DAYS_PER_YEAR)
     fig, (top, bottom) = plt.subplots(2, 1, figsize=(9, 5), sharex=True)
     for axis in (top, bottom):
@@ -478,7 +556,7 @@ def figure_histograms(results, plt):
 
 def heatmap(axis, values, title, text, cmap, vmin, vmax, xlabels, xlabel, steps=STEPS):
     image = axis.imshow(values, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
-    axis.set_xticks(range(len(xlabels)), xlabels, fontsize=9)
+    axis.set_xticks(range(len(xlabels)), xlabels, fontsize=9 if len(xlabels) <= 5 else 7)
     axis.set_yticks(range(len(steps)), [f"{RATE_NAMES[s]}\n(every {s} d)" for s in steps], fontsize=9)
     axis.set_xlabel(xlabel, fontsize=9.5)
     axis.set_title(title, fontsize=10)
@@ -551,7 +629,7 @@ def figure_thresholds_by_rate(results, plt):
 
 def figure_settings_positions(results, plt, names, step=5):
     """Mean test position by x: the tree (median and quartiles over datasets) against the ideal rule."""
-    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 2.2 * len(names) + 0.8),
+    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 1.6 * len(names) + 0.8),
                              sharex=True, sharey=True)
     centers = (POSITION_BINS[:-1] + POSITION_BINS[1:]) / 2
     for j, name in enumerate(names):
@@ -570,8 +648,8 @@ def figure_settings_positions(results, plt, names, step=5):
                       label="ideal rule: median over datasets")
             axis.axvline(BASE.d, color="black", ls=":", lw=1)
             s = setting_summary(cell, step)
-            axis.set_title(f"{name}, edge {edge:g}: {s['leaves']:.1f} leaves, Sharpe "
-                           f"{s['sharpe']['tree']:.2f} ({s['sharpe']['ideal rule']:.2f})", fontsize=9)
+            axis.set_title(f"{name}\nedge {edge:g}: {s['leaves']:.1f} leaves, Sharpe "
+                           f"{s['sharpe']['tree']:.2f} ({s['sharpe']['ideal rule']:.2f})", fontsize=8)
             if i == 0:
                 axis.set_ylabel("mean weight of the asset")
             if j == len(names) - 1:
@@ -585,10 +663,10 @@ def figure_settings_positions(results, plt, names, step=5):
     return fig
 
 
-def figure_settings_maps(results, plt, names, edge=0.10, title="The settings experiment"):
-    shape = (len(SETTING_STEPS), len(names))
+def figure_settings_maps(results, plt, names, edge=0.10, title="The settings experiment", steps=SETTING_STEPS):
+    shape = (len(steps), len(names))
     captured, tree, ideal, leaves, turnover, turn_ideal = (np.full(shape, np.nan) for _ in range(6))
-    for i, step in enumerate(SETTING_STEPS):
+    for i, step in enumerate(steps):
         for j, name in enumerate(names):
             cell = setting_records(results, name, step, edge)
             if not cell:
@@ -597,19 +675,20 @@ def figure_settings_maps(results, plt, names, edge=0.10, title="The settings exp
             captured[i, j], leaves[i, j] = s["captured"], s["leaves"]
             tree[i, j], ideal[i, j] = s["sharpe"]["tree"], s["sharpe"]["ideal rule"]
             turnover[i, j], turn_ideal[i, j] = s["turnover"]["tree"], s["turnover"]["ideal rule"]
-    labels = [n.replace(", ", "\n").replace(" + ", "\n+ ") for n in names]
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    labels = [n.replace("volatility threshold", "vol. threshold").replace("constant volatility", "constant vol.")
+              .replace(", ", "\n").replace(" + ", "\n+ ") for n in names]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9.5))
     axes = axes.ravel()
     heatmap(axes[0], captured, "test gain over the tree without splits,\nas % of the ideal rule's gain",
-            lambda i, j: f"{captured[i, j]:.0f}", "RdYlGn", -50, 110, labels, "", SETTING_STEPS)
+            lambda i, j: f"{captured[i, j]:.0f}", "RdYlGn", -50, 110, labels, "", steps)
     heatmap(axes[1], tree, "annualized test Sharpe ratio of the tree\n(ideal rule in brackets)",
             lambda i, j: f"{tree[i, j]:.2f}\n({ideal[i, j]:.2f})", "Blues", 0, max(1.0, np.nanmax(tree)),
-            labels, "", SETTING_STEPS)
+            labels, "", steps)
     heatmap(axes[2], leaves, "mean number of leaves kept", lambda i, j: f"{leaves[i, j]:.1f}",
-            "Oranges", 1, 8, labels, "", SETTING_STEPS)
+            "Oranges", 1, 8, labels, "", steps)
     heatmap(axes[3], turnover, "turnover per decision of the tree\n(ideal rule in brackets)",
             lambda i, j: f"{turnover[i, j]:.2f}\n({turn_ideal[i, j]:.2f})", "Purples", 0,
-            max(1.0, np.nanmax(turnover)), labels, "", SETTING_STEPS)
+            max(1.0, np.nanmax(turnover)), labels, "", steps)
     for axis in axes[:2]:
         axis.set_ylabel("trading rate", fontsize=9.5)
     fig.suptitle(f"{title} at edge {edge:g} ({DATASETS_PER_SETTING} datasets per cell)", fontsize=11)
@@ -650,7 +729,7 @@ def figure_scores(results, plt, names, step=5, edge=0.10):
 
 def figure_thresholds_by_setting(results, plt, names, step=5):
     """Histograms of the first threshold on x, one row per setting, one column per edge."""
-    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 2.1 * len(names) + 0.8),
+    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 1.6 * len(names) + 0.8),
                              sharex=True, sharey="row")
     bins = np.linspace(-1.5, 1.5, 31)
     for j, name in enumerate(names):
@@ -678,7 +757,101 @@ def figure_thresholds_by_setting(results, plt, names, step=5):
     return fig
 
 
-def figure_split_shares(results, plt, names):
+def resolution_cells(results, axis, step):
+    """{value: records} along one axis of the resolution experiment."""
+    cells = {}
+    for r in results:
+        if r.get("axis") == axis and r["step"] == step:
+            cells.setdefault(r["value"], []).append(r)
+    return dict(sorted(cells.items()))
+
+
+def figure_resolution(results, plt):
+    """Found rate, threshold error, Sharpe and captured gain against the price volatility
+    (fixed drift) and against the observation noise on the feature, by trading rate."""
+    fig, axes = plt.subplots(2, 4, figsize=(13, 7))
+    colors = {5: ORANGE, 21: BLUE}
+    for i, (axis_name, xlabel) in enumerate((("volatility", "price volatility per day (drift +25% a year)"),
+                                             ("noise", "observation noise on x (x has standard deviation 1)"))):
+        for step in RESOLUTION_STEPS:
+            cells = resolution_cells(results, axis_name, step)
+            if not cells:
+                continue
+            values = np.array(list(cells))
+            summaries = [cell_summary(cell, step) for cell in cells.values()]
+            found = [s["on_x"] for s in summaries]
+            errors = []
+            for cell in cells.values():
+                first = np.abs([th for r in cell for f, th in [root_of(r)] if f == "x"])
+                errors.append(np.percentile(first, [25, 50, 75]) if len(first) else [np.nan] * 3)
+            errors = np.array(errors)
+            tree = [s["sharpe"]["tree"] for s in summaries]
+            ideal = [s["sharpe"]["ideal rule"] for s in summaries]
+            captured = [s["captured"] for s in summaries]
+            label = RATE_NAMES[step]
+            axes[i, 0].plot(values, found, "o-", color=colors[step], label=label)
+            axes[i, 1].plot(values, errors[:, 1], "o-", color=colors[step], label=label)
+            axes[i, 1].fill_between(values, errors[:, 0], errors[:, 2], color=colors[step], alpha=0.2, lw=0)
+            axes[i, 2].plot(values, tree, "o-", color=colors[step], label=f"tree, {label}")
+            axes[i, 2].plot(values, ideal, "--", color=colors[step], label=f"ideal rule, {label}")
+            axes[i, 3].plot(values, captured, "o-", color=colors[step], label=label)
+        for j, (title, ylim) in enumerate((("first split on x (% of datasets)", (0, 105)),
+                                          ("distance of the first threshold to d\n(median, quartiles)", (0, None)),
+                                          ("annualized test Sharpe ratio", (None, None)),
+                                          ("test gain captured (% of the ideal rule's)", (-20, 110)))):
+            axis = axes[i, j]
+            axis.set_title(title, fontsize=9.5)
+            axis.set_xlabel(xlabel, fontsize=8.5)
+            axis.set_ylim(*ylim)
+            if axis_name == "volatility":
+                axis.set_xscale("log")
+                axis.set_xticks(RESOLUTION_VOLATILITIES,
+                                [f"{v:.1%} ({BASE.mu / v:.2g})" for v in RESOLUTION_VOLATILITIES],
+                                fontsize=7, rotation=45, ha="right")
+                axis.minorticks_off()
+            if j == 2:
+                axis.legend(fontsize=7)
+            elif i == 0 and j == 0:
+                axis.legend(fontsize=8)
+    axes[0, 0].set_ylabel("price volatility sweep", fontsize=10)
+    axes[1, 0].set_ylabel("observation noise sweep", fontsize=10)
+    fig.suptitle(f"Resolution of the threshold ({DATASETS_PER_RESOLUTION} datasets per point; "
+                 f"in brackets: the edge, drift over volatility per day)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return fig
+
+
+def figure_regime_second_splits(results, plt, names, step=5, edge=0.10):
+    """All kept thresholds below the root, per setting, with the drift and volatility thresholds."""
+    fig, axes = plt.subplots(len(names), 1, figsize=(7.5, 1.4 * len(names) + 0.6), sharex=True)
+    bins = np.linspace(-2.5, 2.5, 51)
+    for axis, name in zip(np.atleast_1d(axes), names):
+        cell = setting_records(results, name, step, edge)
+        if not cell:
+            continue
+        second = [th for r in cell for d, f, th in r["kept"] if d >= 1]
+        axis.hist(np.clip(second, bins[0], bins[-1]), bins=bins, color="#f5c99b", label="second-level thresholds")
+        first = [th for r in cell for f, th in [root_of(r)] if f == "x"]
+        axis.hist(np.clip(first, bins[0], bins[-1]), bins=bins, color=ORANGE, alpha=0.7, label="first threshold")
+        axis.axvline(BASE.d, color="black", ls="--", lw=1.2, label="drift threshold d")
+        d_sigma = cell[0]["volatility_threshold"]
+        if cell[0]["up_volatility_ratio"] != 1:
+            axis.axvline(BASE.d if d_sigma is None else d_sigma, color=RED, ls=":", lw=1.6,
+                         label="volatility threshold")
+        share = 100 * np.mean([any(abs(th - (BASE.d if d_sigma is None else d_sigma)) <= 0.25
+                                   for d, f, th in r["kept"] if d >= 1) for r in cell])
+        axis.set_title(f"{name}\n{len(second)} second-level splits in {len(cell)} datasets; "
+                       f"{share:.0f}% of the datasets have one within 0.25 of the volatility threshold", fontsize=8)
+        axis.set_ylabel("splits")
+    np.atleast_1d(axes)[-1].set_xlabel("threshold on x")
+    handles, labels = np.atleast_1d(axes)[-1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=4, fontsize=8, frameon=False)
+    fig.suptitle(f"Where the splits land ({RATE_NAMES[step]} decisions, edge {edge:g})", fontsize=11)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    return fig
+
+
+def figure_split_shares(results, plt, names, steps=SETTING_STEPS):
     """Per setting and trading rate: first split on x, no split kept, a second-level split kept (% of datasets)."""
     keys = [("on_x", "first split on x"), ("none", "no split kept"), ("second", "second-level split kept")]
     fig, axes = plt.subplots(len(keys), len(SETTING_EDGES), figsize=(9, 3.0 * len(keys)), sharey=True)
@@ -688,10 +861,10 @@ def figure_split_shares(results, plt, names):
             axis = axes[j, i]
             for k, name in enumerate(names):
                 values = [setting_summary(setting_records(results, name, step, edge), step)[key]
-                          if setting_records(results, name, step, edge) else np.nan for step in SETTING_STEPS]
-                axis.bar(np.arange(len(SETTING_STEPS)) + (k - (len(names) - 1) / 2) * width, values, width,
+                          if setting_records(results, name, step, edge) else np.nan for step in steps]
+                axis.bar(np.arange(len(steps)) + (k - (len(names) - 1) / 2) * width, values, width,
                          label=name, color=plt.cm.Oranges(0.3 + 0.6 * k / max(1, len(names) - 1)))
-            axis.set_xticks(range(len(SETTING_STEPS)), [RATE_NAMES[s] for s in SETTING_STEPS], fontsize=8)
+            axis.set_xticks(range(len(steps)), [RATE_NAMES[s] for s in steps], fontsize=8)
             axis.set_title(f"{label} (edge {edge:g})", fontsize=9.5)
             if i == 0:
                 axis.set_ylabel("% of datasets")
@@ -759,6 +932,33 @@ def plot():
             "pruning_hurdle_thresholds": figure_thresholds_by_setting(pruning, plt, names),
             "pruning_hurdle_maps": figure_settings_maps(pruning, plt, names,
                                                          title="The pruning experiment")})
+    if os.path.exists(OPTIONS2_RESULTS):
+        with open(OPTIONS2_RESULTS) as handle:
+            options2 = json.load(handle)
+        names = list(OPTIONS2)
+        print_settings_summary(options2, names, "sharper smoothing and hurdle-below-root experiment", OPTIONS2_STEPS)
+        figures.update({
+            "split_options_2_scores": figure_scores(options2, plt, names),
+            "split_options_2_thresholds": figure_thresholds_by_setting(options2, plt, names),
+            "split_options_2_splits": figure_split_shares(options2, plt, names, OPTIONS2_STEPS),
+            "split_options_2_maps": figure_settings_maps(options2, plt, names, title="Sharper smoothing and the hurdle below the root",
+                                                        steps=OPTIONS2_STEPS)})
+    if os.path.exists(RESOLUTION_RESULTS):
+        with open(RESOLUTION_RESULTS) as handle:
+            resolution = json.load(handle)
+        print_resolution_summary(resolution)
+        figures["resolution_curves"] = figure_resolution(resolution, plt)
+    if os.path.exists(REGIME_RESULTS):
+        with open(REGIME_RESULTS) as handle:
+            regime = json.load(handle)
+        names = list(REGIME)
+        print_settings_summary(regime, names, "regime-volatility experiment")
+        figures.update({
+            "regime_volatility_positions": figure_settings_positions(regime, plt, names),
+            "regime_volatility_maps": figure_settings_maps(regime, plt, names,
+                                                          title="The regime-volatility experiment"),
+            "regime_volatility_thresholds": figure_thresholds_by_setting(regime, plt, names),
+            "regime_volatility_splits": figure_regime_second_splits(regime, plt, names)})
     for name, fig in figures.items():
         fig.savefig(os.path.join(OUT, name + ".pdf"))
         fig.savefig(os.path.join(OUT, name + ".png"), dpi=130)
@@ -788,6 +988,12 @@ if __name__ == "__main__":
         run(enhancement_tasks(), ENHANCEMENTS_RESULTS)
     elif command == "run-pruning":
         run(setting_tasks("pruning", PRUNING), PRUNING_RESULTS)
+    elif command == "run-options":
+        run(setting_tasks("options2", OPTIONS2, OPTIONS2_STEPS), OPTIONS2_RESULTS)
+    elif command == "run-resolution":
+        run(resolution_tasks(), RESOLUTION_RESULTS)
+    elif command == "run-regime":
+        run(setting_tasks("regime", REGIME), REGIME_RESULTS)
     elif command == "plot":
         plot()
     else:

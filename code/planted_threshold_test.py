@@ -55,6 +55,9 @@ class Case:
     train_days: int = 15 * DAYS_PER_YEAR  # days of training data (fitting + checking)
     test_days: int = 5 * DAYS_PER_YEAR  # days kept for the test
     ridge: float = 1e-6
+    feature_noise: float = 0.0  # std of the observation noise on x (x has std 1); the price follows the true x
+    up_volatility_ratio: float = 1.0  # price volatility at or above the volatility threshold, relative to below
+    volatility_threshold: float | None = None  # None: the drift threshold d
     # the decision problem and the tree (defaults: the run of the note)
     risk_aversion: float = 1.0  # lambda of the optimizer
     fee: float = 0.0003  # per traded notional on the asset; cash is free
@@ -73,6 +76,8 @@ class Case:
         0.0  # > 0: soft splits (Boltzmann weights over the candidate thresholds)
     )
     prune_standard_errors: float = 0.0  # pruning: the checking-row gain must exceed this many s.e.
+    smoothing_kernel: str = "laplace"  # or "gaussian"
+    prune_hurdle_from_depth: int = 0  # the hurdle applies to splits at this depth or below
 
     @property
     def mu(self):
@@ -97,48 +102,70 @@ class Case:
     def decisions_per_year(self):
         return DAYS_PER_YEAR / self.step
 
+    @property
+    def d_sigma(self):
+        """The threshold of the volatility regime."""
+        return self.d if self.volatility_threshold is None else self.volatility_threshold
+
+    def volatility_of(self, x):
+        """Price volatility per day when the feature is at x (an array works)."""
+        return self.volatility * np.where(np.asarray(x) < self.d_sigma, 1.0, self.up_volatility_ratio)
+
 
 @dataclass(frozen=True)
 class Rows:
     """One row per decision: asset 0 is the risky asset, asset 1 is cash."""
 
     days: np.ndarray  # (T,) the day of each decision
-    X: np.ndarray  # (T, 1) x read on the decision day
+    X: np.ndarray  # (T, 1) the observed x on the decision day
     R: np.ndarray  # (T, 2) simple return from this decision to the next
     Sigma: np.ndarray  # (T, 2, 2) covariance of that return, from past days only
+    Sigma_true: np.ndarray  # (T, 2, 2) covariance from the regime's true volatility on the decision day
 
 
 def simulate(case, seed):
-    """x and the price, one value per day."""
+    """x, the observed x and the price, one value per day.
+
+    The price follows the true x. The tree only sees the observed x, which is
+    the true x plus white noise of standard deviation case.feature_noise
+    (drawn last, so that datasets without noise are unchanged).
+    """
     rng = np.random.default_rng(seed)
     n_days = case.window + case.step * (case.n_train + case.n_test)
     x = ou_process(case.mean, case.feature_variance, case.k, n_steps=n_days, rng=rng)
-    prices = signal_process(x, case.mu, case.d, case.price_variance, rng=rng)
-    return x, prices
+    prices = signal_process(x, case.mu, case.d, case.price_variance, rng=rng,
+                            up_volatility_ratio=case.up_volatility_ratio,
+                            volatility_threshold=case.volatility_threshold)
+    observed = x + case.feature_noise * rng.normal(size=len(x)) if case.feature_noise > 0 else x
+    return x, observed, prices
 
 
-def decision_rows(x, prices, case):
+def decision_rows(x, observed, prices, case):
     """Rows for a decision every case.step days, after case.window days of history.
 
     On a decision day t:
-      X[t]     = x[t]
+      X[t]     = observed[t], the feature as the tree sees it
       R[t]     = prices[t + step] / prices[t] - 1 for the asset, 0 for cash
       Sigma[t] = step * variance of the last `window` daily returns up to t
                  (days treated as independent), plus the ridge on both assets
     """
     t = np.arange(case.window, len(prices) - case.step, case.step)
-    X = x[t, None]
+    X = observed[t, None]
     R = np.column_stack([prices[t + case.step] / prices[t] - 1, np.zeros(len(t))])
     daily = prices[1:] / prices[:-1] - 1  # daily[s - 1] ends on day s
     Sigma = np.zeros((len(t), 2, 2))
     for row, now in enumerate(t):
         Sigma[row, 0, 0] = case.step * daily[now - case.window : now].var(ddof=1)
     Sigma += case.ridge * np.eye(2)
-    return Rows(t, X, R, Sigma)
+    # The regime's own variance on the decision day: what a clairvoyant would use.
+    Sigma_true = np.zeros((len(t), 2, 2))
+    Sigma_true[:, 0, 0] = case.step * case.volatility_of(x[t]) ** 2
+    Sigma_true += case.ridge * np.eye(2)
+    return Rows(t, X, R, Sigma, Sigma_true)
 
 
 def expected_return_curve(case, grid, n_paths=20000, seed=0):
-    """E[return of the asset over the next case.step days | x = grid value now].
+    """E[return of the asset over the next case.step days | observed x = grid value now].
 
     Monte Carlo on the exact transition of x. With S the number of days spent at
     or above d minus the number spent below, the expected simple return is
@@ -148,6 +175,13 @@ def expected_return_curve(case, grid, n_paths=20000, seed=0):
     decay = np.exp(-case.k)
     noise_std = np.sqrt(case.feature_variance * -np.expm1(-2 * case.k))
     x = np.repeat(np.asarray(grid, dtype=float)[:, None], n_paths, axis=1)
+    if case.feature_noise > 0:
+        # The grid is the observed value; the true x is drawn from its posterior
+        # (both Gaussian: shrink towards the mean, then add the posterior noise).
+        shrink = case.feature_variance / (case.feature_variance + case.feature_noise**2)
+        x = case.mean + shrink * (x - case.mean) + rng.normal(
+            0, np.sqrt(shrink * case.feature_noise**2), x.shape
+        )
     balance = np.where(x >= case.d, 1.0, -1.0)
     for _ in range(case.step - 1):
         x = case.mean + decay * (x - case.mean) + rng.normal(0, noise_std, x.shape)
@@ -197,7 +231,7 @@ def run_case(case, seed, verbose=False, curve=None):
     """
     series = simulate(case, seed)
     rows = decision_rows(*series, case)
-    X, R, S = rows.X, rows.R, rows.Sigma
+    X, R, S, S_true = rows.X, rows.R, rows.Sigma, rows.Sigma_true
     train, test = slice(0, case.n_train), slice(case.n_train, None)
     optimizer = PortfolioOptimizer(
         2,
@@ -215,6 +249,8 @@ def run_case(case, seed, verbose=False, curve=None):
         refine_standard_errors=case.refine_standard_errors,
         smoothing=case.smoothing,
         prune_standard_errors=case.prune_standard_errors,
+        smoothing_kernel=case.smoothing_kernel,
+        prune_hurdle_from_depth=case.prune_hurdle_from_depth,
         validation_fraction=0.25,
         verbose=verbose,
     )
@@ -243,6 +279,9 @@ def run_case(case, seed, verbose=False, curve=None):
         ideal = np.column_stack([np.interp(X[:, 0], *curve), np.zeros(len(X))])
         strategies["ideal rule"] = lambda part, start: replay_path(
             optimizer, ideal[part], R[part], S[part], start
+        )
+        strategies["ideal rule, true variance"] = lambda part, start: replay_path(
+            optimizer, ideal[part], R[part], S_true[part], start
         )
     paths = {}
     for name, run in strategies.items():

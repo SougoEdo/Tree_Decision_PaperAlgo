@@ -74,14 +74,16 @@ def moving_average(x, window):
 
 
 def signal_process(
-    x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None, up_volatility_ratio=1.0
+    x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None, up_volatility_ratio=1.0,
+    volatility_threshold=None,
 ):
     """Simulate dS = drift(X)*S*dt + sqrt(variance)*S*dB, starting at s0.
 
     drift(X) is -mu below d, +mu otherwise; mu is a return drift per unit time.
     `variance` is the return variance rate (volatility squared), not price variance.
-    Below d the volatility is sqrt(variance); above d it is up_volatility_ratio
-    times that (1 = the same volatility in both regimes).
+    Below volatility_threshold (d by default) the volatility is sqrt(variance);
+    at or above it, up_volatility_ratio times that (1 = the same volatility in
+    both regimes).
     Use the same dt as the feature process. Return len(x) prices, with S[0] = s0.
     x[t] determines the drift from S[t] to S[t+1], without looking ahead.
     The exponential update freezes drift over each step and keeps prices positive.
@@ -100,8 +102,9 @@ def signal_process(
         raise ValueError("Require a nonempty, finite 1D feature series.")
 
     drift = np.where(x[:-1] < d, -mu, mu)
+    d_sigma = d if volatility_threshold is None else volatility_threshold
     sigma = np.where(
-        x[:-1] < d, np.sqrt(variance), up_volatility_ratio * np.sqrt(variance)
+        x[:-1] < d_sigma, np.sqrt(variance), up_volatility_ratio * np.sqrt(variance)
     )
     noise = rng.normal(0, np.sqrt(dt) * sigma, size=len(x) - 1)
     log_returns = (drift - 0.5 * sigma**2) * dt + noise
