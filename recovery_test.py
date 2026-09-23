@@ -62,6 +62,10 @@ class Case:
     min_samples_leaf: int = 20
     max_thresholds: int | None = None  # None: every partition is screened
     threshold_quantiles: tuple[float, ...] | None = None  # e.g. (0.25, 0.5, 0.75)
+    min_leaf_fraction: float = 0.0  # each child keeps at least this share of its node
+    refine_thresholds: bool = False  # screen every partition around the best quantile too
+    refine_standard_errors: float = 0.0  # hard splits: the refinement must win by this many s.e.
+    smoothing: float = 0.0  # > 0: soft splits (Boltzmann weights over the candidate thresholds)
 
     @property
     def mu(self):
@@ -166,6 +170,13 @@ def splits_of(node, depth=0):
     )
 
 
+def spreads_of(node):
+    """The spread of every split left in the tree (0 for a hard split), in the order of splits_of."""
+    if node.feature is None:
+        return []
+    return [float(node.spread)] + spreads_of(node.left) + spreads_of(node.right)
+
+
 def annual(path, case):
     """Annualized figures of a path of decisions held case.step days each."""
     return path.summary(periods_per_year=case.decisions_per_year)
@@ -190,6 +201,10 @@ def run_case(case, seed, verbose=False, curve=None):
         min_samples_leaf=case.min_samples_leaf,
         max_thresholds=case.max_thresholds,
         threshold_quantiles=case.threshold_quantiles,
+        min_leaf_fraction=case.min_leaf_fraction,
+        refine_thresholds=case.refine_thresholds,
+        refine_standard_errors=case.refine_standard_errors,
+        smoothing=case.smoothing,
         validation_fraction=0.25,
         verbose=verbose,
     )
@@ -233,6 +248,7 @@ def run_case(case, seed, verbose=False, curve=None):
         "optimizer": optimizer,
         "grown": [(g.depth, FEATURES[g.feature], g.threshold) for g in tree.growth_log],
         "kept": splits_of(tree.root),
+        "spreads": spreads_of(tree.root),
         "feature_std": float(np.sqrt(case.feature_variance)),
     }
 

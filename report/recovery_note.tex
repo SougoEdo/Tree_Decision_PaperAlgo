@@ -301,7 +301,7 @@ quartiles, depth 3 & only three candidate thresholds per split, the quartiles of
 \end{table}
 
 \begin{figure}[H]
-\centering\includegraphics[width=0.88\linewidth]{recovery_settings_positions}
+\centering\includegraphics[width=0.85\linewidth]{recovery_settings_positions}
 \caption{Weekly decisions: the weight of the asset taken on the test decisions, by $x$ on the decision day. Orange: the tree (median over the 40 datasets, and the quartiles as a band); dashed blue: the ideal rule, the optimizer fed with the true $g_5(x)$. One row per setting; \emph{left:} edge 0.05, \emph{right:} edge 0.10. Panel titles: mean number of leaves, annualized test Sharpe ratio of the tree (ideal rule in brackets).}
 \label{fig:positions}
 \end{figure}
@@ -363,6 +363,80 @@ quartiles, depth 3 & 2 & 2.3 & 92 & 8 & $+0.06$ & 0.64 & 1.00 & 62\% & 0.12 & 0.
 \item \textbf{Quartile candidates trade precision for stability.} At the fast rates the threshold is less precise (62\% of the gain captured at every 2 days, against 83\%): the candidates are quantiles of a persistent feature, and over the 11 fitting years the sample median of $x$ is itself off by about $\pm0.2$ (autocorrelation time $1/k=50$ days), whereas the full search reads the threshold off the returns. At the slow rates, where the data cannot do better anyway, the coarse grid costs nothing (73\% against 71\% monthly) and its protection against small leaves shows: 20\% of the monthly trees keep no split against 28\%, and the thresholds' medians are the closest to $d$ of all settings ($+0.06$ to $+0.09$).
 \end{itemize}
 
+
+\section{A third experiment: quantile candidates, refinement and soft splits}\label{sec:enhancements}
+\textbf{Why.} Sections~\ref{sec:results} and~\ref{sec:settings} showed two sources of error: the threshold moves by $\pm0.1$ to $\pm0.3$ from one dataset to the next, and a split on a handful of decisions occasionally survives pruning. Three options were added to the split search, all off by default (the training document \code{training_pipeline.tex}, Section~7, gives the exact rules):
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \emph{Quantile candidates}: only the nine deciles of the node's values are screened, and every child keeps at least 10\% of its node;
+\item \emph{Refinement}: every partition between the two deciles neighbouring the best one is screened as well; with plain splits the refined threshold wins only if it beats the decile by one standard error of the regret difference;
+\item \emph{Soft splits (smoothing $\kappa=1$)}: every candidate threshold $\theta$ keeps a Boltzmann weight $\pi_\theta\propto e^{-z_\theta/\kappa}$, $z_\theta$ its regret excess over the best candidate in standard errors; a decision at $x$ belongs to the left leaf with the weight of the thresholds at or above $x$, so the tree's score becomes a continuous function of $x$ and thresholds the data cannot tell apart share the weight.
+\end{itemize}
+Each option was run alone and all three together, with the world and the protocol of Section~\ref{sec:settings} (rates 2, 5, 10 and 21 days, edges 0.05 and 0.10, 40 datasets per cell, $\lambda=1$). Two measurements are new: the tree's score as a function of $x$ (Figure~\ref{fig:scores}) and the \emph{spread} of a soft root split, the distance between the 25\% and 75\% quantiles of its weights.
+
+\begin{figure}[H]
+\centering\includegraphics[width=0.9\linewidth]{recovery_enhancements_scores}
+\caption{Weekly decisions, edge 0.10: the score the tree gives the asset as a function of $x$ (median over the 40 datasets, quartiles as a band). Plain splits give a step; smoothing alone gives a ramp that stays near zero over half a standard deviation; the combination gives a step with a narrow soft edge.}
+\label{fig:scores}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.9\linewidth]{recovery_enhancements_thresholds}
+\caption{Weekly decisions: where the first threshold lands, one row per setting; \emph{left:} edge 0.05, \emph{right:} edge 0.10. The target is $d=0$.}
+\label{fig:enh-thresholds}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.95\linewidth]{recovery_enhancements_maps}
+\caption{Edge 0.10, rows: trading rate, columns: setting. Share of the ideal rule's test gain captured; annualized test Sharpe ratio (ideal rule in brackets); mean number of leaves; turnover per decision (ideal rule in brackets).}
+\label{fig:enh-maps}
+\end{figure}
+
+\begin{table}[H]
+\centering\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l r r rr r r r rr r@{}}
+\toprule
+& & & \multicolumn{2}{c}{splits (\%)} & \multicolumn{2}{c}{first threshold on $x$} & & \multicolumn{2}{c}{annual.\ Sharpe} & gain\\
+\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){9-10}
+setting & $h$ & leaves & on $x$ & none & median [quartiles] & $|\cdot|\le0.25$ & spread & tree & ideal & captured\\
+\midrule
+base & 2 & 2.2 & 98 & 2 & $+0.03\ [-0.01,+0.12]$ & 97\% & -- & 0.87 & 1.00 & 82\% \\
+ & 5 & 2.0 & 92 & 8 & $+0.08\ [+0.01,+0.20]$ & 84\% & -- & 0.80 & 0.91 & 83\% \\
+ & 10 & 1.9 & 88 & 12 & $+0.05\ [-0.10,+0.26]$ & 63\% & -- & 0.69 & 0.84 & 77\% \\
+ & 21 & 1.8 & 72 & 28 & $+0.09\ [-0.19,+0.29]$ & 45\% & -- & 0.57 & 0.74 & 71\% \\
+\midrule
+deciles & 2 & 2.4 & 98 & 2 & $+0.06\ [-0.02,+0.15]$ & 90\% & -- & 0.76 & 1.00 & 69\% \\
+ & 5 & 2.3 & 95 & 5 & $+0.05\ [-0.04,+0.16]$ & 82\% & -- & 0.80 & 0.91 & 84\% \\
+ & 10 & 2.2 & 85 & 15 & $+0.04\ [-0.09,+0.19]$ & 74\% & -- & 0.70 & 0.84 & 78\% \\
+ & 21 & 2.0 & 70 & 30 & $+0.00\ [-0.17,+0.18]$ & 68\% & -- & 0.50 & 0.74 & 64\% \\
+\midrule
+deciles + refinement & 2 & 2.2 & 98 & 2 & $+0.07\ [-0.01,+0.12]$ & 92\% & -- & 0.84 & 1.00 & 79\% \\
+ & 5 & 2.3 & 95 & 5 & $+0.06\ [-0.04,+0.16]$ & 84\% & -- & 0.79 & 0.91 & 84\% \\
+ & 10 & 2.1 & 85 & 15 & $+0.04\ [-0.09,+0.18]$ & 71\% & -- & 0.68 & 0.84 & 78\% \\
+ & 21 & 1.9 & 68 & 32 & $-0.02\ [-0.20,+0.20]$ & 59\% & -- & 0.53 & 0.74 & 68\% \\
+\midrule
+smoothing & 2 & 2.2 & 78 & 22 & $+0.09\ [-0.02,+0.23]$ & 74\% & 0.65 & 0.35 & 1.00 & 28\% \\
+ & 5 & 2.2 & 80 & 20 & $+0.08\ [-0.07,+0.24]$ & 69\% & 0.64 & 0.53 & 0.91 & 52\% \\
+ & 10 & 2.1 & 80 & 20 & $+0.07\ [-0.05,+0.23]$ & 62\% & 0.70 & 0.64 & 0.84 & 67\% \\
+ & 21 & 1.9 & 75 & 25 & $+0.10\ [-0.08,+0.17]$ & 87\% & 0.68 & 0.56 & 0.74 & 61\% \\
+\midrule
+all three & 2 & 2.0 & 85 & 15 & $+0.06\ [+0.01,+0.14]$ & 88\% & 0.23 & 0.56 & 1.00 & 47\% \\
+ & 5 & 2.1 & 92 & 8 & $+0.06\ [-0.04,+0.14]$ & 84\% & 0.22 & 0.78 & 0.91 & 82\% \\
+ & 10 & 2.2 & 90 & 10 & $+0.05\ [-0.11,+0.20]$ & 72\% & 0.24 & 0.76 & 0.84 & 83\% \\
+ & 21 & 1.9 & 80 & 20 & $+0.03\ [-0.16,+0.21]$ & 69\% & 0.28 & 0.58 & 0.74 & 74\% \\
+\bottomrule
+\end{tabular}
+\caption{The split-search options at edge 0.10, 40 datasets per row ($h$: days between decisions; turnover is in Figure~\ref{fig:enh-maps}). At edge 0.05 no setting improves on the base (gain captured 36--48\% for the base, 30--49\% with deciles, with or without refinement, 24--49\% with all three), and smoothing alone loses most of it (8--23\%).}
+\label{tab:enhancements}
+\end{table}
+
+\textbf{Reading the figures and the table.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{Deciles make the threshold steadier at the slow rates}: the share within $0.25$ of $d$ rises from 63 to 74\% every two weeks and from 45 to 68\% monthly, and the quartile width falls from 0.36 to 0.28 and from 0.48 to 0.35. Weekly and every two weeks the Sharpe ratio is unchanged; at the fastest rate the coarse grid costs 0.11 of Sharpe (0.76 against 0.87), because there the data can pin the threshold finer than a decile.
+\item \textbf{The refinement removes that cost} (0.84 at every 2 days, 79\% of the gain against 69\%) and keeps the steadier thresholds. Deciles with refinement match the base everywhere and centre the threshold better at the slow rates: a reasonable default.
+\item \textbf{Smoothing alone, at $\kappa=1$, is too wide and it interacts badly with the fee.} The weights spread over about $\pm0.3$ (spread 0.65): near $d$ the expected return is small, so thresholds within that band are within one standard error of each other. The score then rises gradually from about zero (Figure~\ref{fig:scores}) and, with $\lambda=1$, stays inside the no-trade window of the optimizer for most decisions: the tree trades three to five times less (turnover 0.03 against 0.15 at every 2 days) and captures 28 to 67\% of the gain instead of 77 to 83\%. Smoothing the \emph{score} is not sizing the \emph{position}: with a proportional fee a small score means ``do not trade'', not ``trade a little''.
+\item \textbf{All three together}: the candidate set (the deciles and the refinement window) confines the weights, spread 0.22 to 0.28, and the threshold is as steady as with deciles (88, 84, 72 and 69\% within $0.25$). Every two weeks and monthly this setting captures the most of all (83\% and 74\%) with the best Sharpe ratios (0.76 and 0.58); at every 2 days it still pays for the soft edge (47\%).
+\item \textbf{Next steps.} A sharper weight ($\kappa\approx0.3$, or $e^{-z^2/2\kappa^2}$) should keep the soft edge where the data are undecided without pushing the score into the no-trade window; and smoothing is worth more where positions are meant to be interior, that is with $\lambda\ge5$ (Section~\ref{sec:settings}) or a quadratic cost. Deciles with refinement can be switched on now for slow trading rates.
+\end{itemize}
+
 \section{How to reproduce}
 Code and results are in \code{PaperAlgo}; the results were produced with \code{synthetic_data.py} as committed in \code{eae145c} (one volatility for both regimes).
 \begin{itemize}\setlength{\itemsep}{1pt}
@@ -371,5 +445,7 @@ Code and results are in \code{PaperAlgo}; the results were produced with \code{s
 \item \code{python recovery_figures.py plot}: the figures and the summary table of Tables~\ref{tab:edge}--\ref{tab:k}.
 \item \code{python -m unittest discover -s tests}: 53 tests, including the alignment and no-look-ahead checks of the rows and the Sharpe-of-cash convention.
 \item \code{python recovery_figures.py run-settings}: the settings experiment of Section~\ref{sec:settings}, 1{,}920 fits, 54 minutes; writes \code{report/figures/recovery_settings.json}, which \code{plot} then turns into Figures~\ref{fig:positions}--\ref{fig:settings-maps} and Table~\ref{tab:settings}.
+\item \code{python recovery_figures.py run-enhancements}: the split-search options of Section~\ref{sec:enhancements}, 1{,}600 fits, 35 minutes; writes \code{report/figures/recovery_enhancements.json}, drawn by \code{plot} as Figures~\ref{fig:scores}--\ref{fig:enh-maps} and Table~\ref{tab:enhancements}.
+\item \code{report/training_pipeline.tex}: the training, step by step, with the equations of every option.
 \end{itemize}
 \end{document}

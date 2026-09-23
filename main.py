@@ -89,6 +89,10 @@ class TreeConfig:
     min_samples_leaf: int = 10
     max_thresholds: int | None = 10  # None tests every distinct partition
     threshold_quantiles: tuple[float, ...] | None = None  # e.g. (0.25, 0.5, 0.75): only the quantiles of the node's values
+    min_leaf_fraction: float = 0.0  # each child keeps at least this share of its node's rows (on top of min_samples_leaf)
+    refine_thresholds: bool = False  # with threshold_quantiles: also screen every partition around the best quantile
+    refine_standard_errors: float = 0.0  # hard splits: a refined threshold must beat the quantile one by this many s.e.
+    smoothing: float = 0.0  # > 0: soft splits with Boltzmann weights exp(-z / smoothing) over the candidate thresholds
     min_regret_improvement: float = 1e-6  # average gain per observation at node
     shortlist_size: int = 3  # screened splits per leaf that get a full fit and replay
     min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
@@ -445,9 +449,12 @@ class Node:
     n_samples: int
     regret_sum: float
     feature: int | None = None
-    threshold: float | None = None
+    threshold: float | None = None  # a soft split reports the weighted median of `thresholds`
     left: Node | None = None
     right: Node | None = None
+    thresholds: np.ndarray | None = None  # soft split: candidate thresholds, ascending ...
+    weights: np.ndarray | None = None  # ... and their Boltzmann weights, summing to 1
+    spread: float = 0.0  # soft split: thresholds between the 25% and 75% weight quantiles
 
 
 @dataclass(frozen=True)
@@ -483,6 +490,28 @@ class PruneRecord:
 
 # 4. Grow one tree on its own replayed training path.
 class SPOPortfolioTree:
+    """See the module docstring. Three options extend the plain tree; all are
+    off by default, and then the tree is exactly the one described there.
+
+    threshold_quantiles (+ min_leaf_fraction): only the partitions nearest to
+    these quantiles of a node's values are screened, and every child keeps at
+    least that share of its node. With refine_thresholds, every partition
+    between the neighbouring quantile candidates of the best one is screened
+    as well; with hard splits the refined threshold replaces the quantile one
+    only if it beats it by refine_standard_errors standard errors of the
+    regret difference.
+
+    smoothing > 0: soft splits. Every screened threshold t of the chosen
+    feature keeps a Boltzmann weight exp(-z_t / smoothing), with z_t the
+    regret excess of t over the best candidate in standard errors. A row then
+    belongs to the left child with the total weight of the thresholds at or
+    above its value, so the tree's score is a continuous function of the
+    feature, and thresholds that the data cannot tell apart share the weight.
+    Leaf scores are fitted on their rows weighted by membership; the regret,
+    the replay, the Sharpe gate and the pruning see per-row scores only and
+    are unchanged.
+    """
+
     def __init__(self, optimizer: PortfolioOptimizer, config: TreeConfig):
         self.optimizer = optimizer
         self.config = config
@@ -510,6 +539,9 @@ class SPOPortfolioTree:
                     config.prediction_bound,
                     config.regret_tolerance,
                     config.validation_fraction,
+                    config.min_leaf_fraction,
+                    config.refine_standard_errors,
+                    config.smoothing,
                 ]
             ).all()
             or config.min_regret_improvement < 0
@@ -517,11 +549,16 @@ class SPOPortfolioTree:
             or config.prediction_bound <= 0
             or config.regret_tolerance <= 0
             or not 0 <= config.validation_fraction < 1
+            or not 0 <= config.min_leaf_fraction < 0.5
+            or config.refine_standard_errors < 0
+            or config.smoothing < 0
         ):
             raise ValueError(
-                "Invalid improvement thresholds, prediction bound, "
-                "regret tolerance, or validation fraction."
+                "Invalid improvement thresholds, prediction bound, regret tolerance, "
+                "validation fraction, leaf fraction, refinement or smoothing setting."
             )
+        if config.refine_thresholds and config.threshold_quantiles is None:
+            raise ValueError("refine_thresholds needs threshold_quantiles.")
 
     def fit(self, X, R, Sigma, initial_weights=None):
         """Grow the tree on chronological rows while it trades its own holdings.
@@ -569,9 +606,9 @@ class SPOPortfolioTree:
                 scores = self._scores(leaves, len(X))
                 path = self._replay(scores)
                 self._measure_from(path)
-                for leaf, rows, _ in leaves:
-                    leaf.n_samples = len(rows)
-                    leaf.regret_sum = self._score_prediction(leaf.prediction, rows)
+                for leaf, rows, weights, _ in leaves:
+                    leaf.n_samples = int(round(weights.sum()))
+                    leaf.regret_sum = self._score_prediction(leaf.prediction, rows, weights)
                 # Always kept: the scores it replaces never saw the checking rows.
                 self._refit_leaves(leaves, scores, path, on_all_rows=True)
             self.root = root
@@ -583,19 +620,23 @@ class SPOPortfolioTree:
         return self
 
     def _grow(self, X, R, Sigma):
-        """Best-first growth on these rows: (root, leaves, per-row scores, replayed path)."""
+        """Best-first growth on these rows: (root, leaves, per-row scores, replayed path).
+
+        A leaf is (node, rows, weights, depth): the rows that reach it and, with
+        soft splits, the weight with which they do (1 everywhere otherwise).
+        """
         n = self.optimizer.n_assets
         self._X, self._R, self._S = X.copy(), R.copy(), Sigma.copy()
         # The root is scored from equal-weight holdings; from then on,
         # regrets are measured from the holdings of the replayed tree.
-        rows = np.arange(len(X))
+        rows, ones = np.arange(len(X)), np.ones(len(X))
         equal = np.full((len(X), n), 1.0 / n)
         self._U = equal
         self._benchmarks = self.optimizer.utility(
             self._R, self.optimizer.solve(self._R, equal, self._S), equal, self._S
         )
-        root = self._fit_leaf(rows)
-        leaves = [(root, rows, 0)]
+        root = self._fit_leaf(rows, weights=ones)
+        leaves = [(root, rows, ones, 0)]
         scores = np.tile(root.prediction, (len(X), 1))
         path = self._replay(scores)
         self._measure_from(path)
@@ -605,37 +646,33 @@ class SPOPortfolioTree:
             split = self._best_split(leaves, scores, path.sharpe)
             if split is None:
                 break
-            (
-                position,
-                feature,
-                threshold,
-                left,
-                right,
-                left_rows,
-                right_rows,
-                gain,
-                new_path,
-            ) = split
-            node, node_rows, depth = leaves.pop(position)
-            node.feature, node.threshold = feature, float(threshold)
+            (position, feature, thresholds, pis, left, right,
+             left_rows, left_weights, right_rows, right_weights,
+             gain, new_scores, new_path) = split
+            node, node_rows, node_weights, depth = leaves.pop(position)
+            self._set_split(node, feature, thresholds, pis)
             node.left, node.right = left, right
-            leaves += [(left, left_rows, depth + 1), (right, right_rows, depth + 1)]
-            scores[left_rows], scores[right_rows] = left.prediction, right.prediction
+            leaves += [
+                (left, left_rows, left_weights, depth + 1),
+                (right, right_rows, right_weights, depth + 1),
+            ]
+            scores = new_scores
             self.growth_log.append(
                 SplitRecord(
                     depth,
-                    len(node_rows),
+                    int(round(node_weights.sum())),
                     feature,
-                    float(threshold),
+                    float(node.threshold),
                     gain,
                     path.sharpe,
                     new_path.sharpe,
                 )
             )
             if self.config.verbose:
+                soft = f" (soft, spread {node.spread:.3g})" if node.thresholds is not None else ""
                 print(
                     f"split {len(self.growth_log)}: depth={depth}, "
-                    f"N={len(node_rows)}, x[{feature}] <= {threshold:.5g}, "
+                    f"N={int(round(node_weights.sum()))}, x[{feature}] <= {node.threshold:.5g}{soft}, "
                     f"regret -{gain:.3g} per row, "
                     f"Sharpe {path.sharpe:.4f} -> {new_path.sharpe:.4f}"
                 )
@@ -664,26 +701,31 @@ class SPOPortfolioTree:
                 self.optimizer, scores[n_fit:], R[n_fit:], Sigma[n_fit:], holdings
             )
 
-        def visit(node, rows, depth):
+        def visit(node, rows, weights, depth):
             if node.feature is None:
                 return
-            left = self._X[rows, node.feature] <= node.threshold
-            visit(node.left, rows[left], depth + 1)
-            visit(node.right, rows[~left], depth + 1)
+            m = self._membership(node, self._X[rows, node.feature])
+            visit(node.left, rows[m > 0], (weights * m)[m > 0], depth + 1)
+            visit(node.right, rows[m < 1], (weights * (1 - m))[m < 1], depth + 1)
             with_split = checking_path()
             self._measure_from(
                 self._replay(self._scores(self._leaves(root, self._X), n_fit))
             )
-            leaf = self._fit_leaf(rows, node.prediction)
+            leaf = self._fit_leaf(rows, node.prediction, weights)
             split = (
                 node.feature,
                 node.threshold,
+                node.thresholds,
+                node.weights,
+                node.spread,
                 node.left,
                 node.right,
                 node.prediction,
                 node.regret_sum,
             )
-            node.feature = node.threshold = node.left = node.right = None
+            node.feature = node.threshold = node.thresholds = node.weights = None
+            node.left = node.right = None
+            node.spread = 0.0
             node.prediction, node.regret_sum = leaf.prediction, leaf.regret_sum
             without = checking_path()
             kept = bool(
@@ -695,6 +737,9 @@ class SPOPortfolioTree:
                 (
                     node.feature,
                     node.threshold,
+                    node.thresholds,
+                    node.weights,
+                    node.spread,
                     node.left,
                     node.right,
                     node.prediction,
@@ -721,23 +766,55 @@ class SPOPortfolioTree:
                     f"({'kept' if kept else 'removed'})"
                 )
 
-        visit(root, np.arange(n_fit), 0)
+        visit(root, np.arange(n_fit), np.ones(n_fit), 0)
 
-    def _leaves(self, node, X, rows=None, depth=0):
-        """(leaf, the rows of X that reach it, depth) for every leaf below node."""
+    # ----------------------------------------------------------------- memberships
+    @staticmethod
+    def _membership_of(thresholds, pis, x):
+        """Weight with which values x fall on the left of a split: the total
+        weight of the candidate thresholds at or above x (1 or 0 for a hard split)."""
+        cumulative = np.concatenate([[0.0], np.cumsum(pis)])
+        below = np.searchsorted(thresholds, x, side="left")  # candidates strictly below x
+        return np.clip(1.0 - cumulative[below], 0.0, 1.0)
+
+    def _membership(self, node, x):
+        if node.thresholds is None:
+            return (np.asarray(x) <= node.threshold).astype(float)
+        return self._membership_of(node.thresholds, node.weights, x)
+
+    @staticmethod
+    def _set_split(node, feature, thresholds, pis):
+        """Record a split on the node: hard (one threshold) or soft (several, weighted)."""
+        node.feature = feature
+        if len(thresholds) == 1:
+            node.threshold, node.thresholds, node.weights, node.spread = (
+                float(thresholds[0]), None, None, 0.0,
+            )
+            return
+        cumulative = np.cumsum(pis)
+        quantile = lambda q: float(thresholds[min(np.searchsorted(cumulative, q), len(thresholds) - 1)])
+        node.threshold = quantile(0.5)
+        node.thresholds, node.weights = np.asarray(thresholds, dtype=float), np.asarray(pis, dtype=float)
+        node.spread = quantile(0.75) - quantile(0.25)
+
+    def _leaves(self, node, X, rows=None, weights=None, depth=0):
+        """(leaf, the rows of X that reach it, their weights, depth) for every leaf below node."""
         rows = np.arange(len(X)) if rows is None else rows
+        weights = np.ones(len(rows)) if weights is None else weights
         if node.feature is None:
-            return [(node, rows, depth)]
-        left = X[rows, node.feature] <= node.threshold
-        return self._leaves(node.left, X, rows[left], depth + 1) + self._leaves(
-            node.right, X, rows[~left], depth + 1
-        )
+            return [(node, rows, weights, depth)]
+        m = self._membership(node, X[rows, node.feature])
+        left, right = m > 0, m < 1
+        return self._leaves(
+            node.left, X, rows[left], (weights * m)[left], depth + 1
+        ) + self._leaves(node.right, X, rows[right], (weights * (1 - m))[right], depth + 1)
 
     def _scores(self, leaves, n_rows):
-        """Per-row scores from a list of (leaf, rows, depth)."""
-        scores = np.empty((n_rows, self.optimizer.n_assets))
-        for leaf, rows, _ in leaves:
-            scores[rows] = leaf.prediction
+        """Per-row scores from a list of (leaf, rows, weights, depth): the
+        membership-weighted mixture of the leaf scores (one leaf per row when hard)."""
+        scores = np.zeros((n_rows, self.optimizer.n_assets))
+        for leaf, rows, weights, _ in leaves:
+            scores[rows] += weights[:, None] * leaf.prediction
         return scores
 
     def _replay(self, scores):
@@ -750,101 +827,137 @@ class SPOPortfolioTree:
         """From now on, measure regrets from the holdings of this replayed path."""
         self._U, self._benchmarks = path.holdings, path.utility + path.regret
 
+    def _min_leaf(self, mass):
+        c = self.config
+        return max(c.min_samples_leaf, int(np.ceil(c.min_leaf_fraction * mass)))
+
+    # ----------------------------------------------------------------- split search
     def _best_split(self, leaves, scores, sharpe):
         """The split with the largest regret reduction that also raises the
         replayed Sharpe, or None."""
         c = self.config
         candidates = []
-        for position, (node, rows, depth) in enumerate(leaves):
-            if depth >= c.max_depth or len(rows) < 2 * c.min_samples_leaf:
+        for position, (node, rows, weights, depth) in enumerate(leaves):
+            mass = weights.sum()
+            if depth >= c.max_depth or mass < 2 * self._min_leaf(mass):
                 continue
             # Compare like with like. The leaf's scores were fitted on the
             # holdings of an earlier tree, so refit them on the current holdings
             # before measuring what two leaves add over one.
-            parent = self._fit_leaf(rows, node.prediction)
-            for feature, threshold, left_rows, right_rows in self._shortlist(rows):
-                left = self._fit_leaf(left_rows, parent.prediction)
-                right = self._fit_leaf(right_rows, parent.prediction)
+            parent = self._fit_leaf(rows, node.prediction, weights)
+            for feature, thresholds, pis in self._shortlist(rows, weights):
+                m = self._membership_of(thresholds, pis, self._X[rows, feature])
+                on_left, on_right = m > 0, m < 1
+                left_rows, left_weights = rows[on_left], (weights * m)[on_left]
+                right_rows, right_weights = rows[on_right], (weights * (1 - m))[on_right]
+                left = self._fit_leaf(left_rows, parent.prediction, left_weights)
+                right = self._fit_leaf(right_rows, parent.prediction, right_weights)
                 reduction = parent.regret_sum - left.regret_sum - right.regret_sum
-                if reduction / len(rows) > c.min_regret_improvement:
+                if reduction / mass > c.min_regret_improvement:
                     candidates.append(
-                        (
-                            reduction,
-                            position,
-                            feature,
-                            threshold,
-                            left,
-                            right,
-                            left_rows,
-                            right_rows,
-                        )
+                        (reduction, position, feature, thresholds, pis, m,
+                         left, right, left_rows, left_weights, right_rows, right_weights)
                     )
         # The SPO loss chooses (largest total regret reduction over all leaves,
         # as in SPOT); the replayed Sharpe must confirm, else the next one is tried.
         candidates.sort(key=lambda candidate: candidate[0], reverse=True)
-        for (
-            reduction,
-            position,
-            feature,
-            threshold,
-            left,
-            right,
-            left_rows,
-            right_rows,
-        ) in candidates:
-            candidate = scores.copy()
-            candidate[left_rows], candidate[right_rows] = (
-                left.prediction,
-                right.prediction,
-            )
+        for (reduction, position, feature, thresholds, pis, m,
+             left, right, left_rows, left_weights, right_rows, right_weights) in candidates:
+            # Scores of the tree with this split, rebuilt from its leaves (exact).
+            trial = (leaves[:position]
+                     + [(left, left_rows, left_weights, 0), (right, right_rows, right_weights, 0)]
+                     + leaves[position + 1:])
+            candidate = self._scores(trial, len(scores))
             path = self._replay(candidate)
             # TODO: a split is judged as a whole, so a profitable split whose
             # feature is noisy around the threshold still gets in and pays
             # fees on back-and-forth leaf switches ("noise switches" in the
             # module docstring).
             if path.sharpe > sharpe + c.min_sharpe_improvement:  # NaN never qualifies
-                gain = reduction / len(leaves[position][1])
-                return (
-                    position,
-                    feature,
-                    threshold,
-                    left,
-                    right,
-                    left_rows,
-                    right_rows,
-                    gain,
-                    path,
-                )
+                gain = reduction / weights.sum()
+                return (position, feature, thresholds, pis, left, right,
+                        left_rows, left_weights, right_rows, right_weights,
+                        gain, candidate, path)
         return None
 
-    def _shortlist(self, rows):
-        """Cheap screen: rank a leaf's splits by their regret when each child
-        simply uses its clipped mean return as scores; keep the best few."""
+    def _shortlist(self, rows, weights):
+        """Cheap screen of a leaf's splits: each child simply uses its clipped
+        (weighted) mean return as scores. Returns (feature, thresholds, weights)
+        candidates: one threshold with weight 1 for a hard split, the whole set
+        of the feature's candidates with their Boltzmann weights for a soft one."""
         c = self.config
+        min_leaf = self._min_leaf(weights.sum())
         screened = []
         for feature in range(self.n_features):
             values = self._X[rows, feature]
-            for threshold in self._thresholds(values):
-                left_rows, right_rows = (
-                    rows[values <= threshold],
-                    rows[values > threshold],
-                )
-                if min(len(left_rows), len(right_rows)) < c.min_samples_leaf:
-                    continue
-                regret = sum(
-                    self._score_prediction(
-                        np.clip(
-                            self._R[part].mean(axis=0),
-                            -c.prediction_bound,
-                            c.prediction_bound,
-                        ),
-                        part,
-                    )
-                    for part in (left_rows, right_rows)
-                )
-                screened.append((regret, feature, threshold, left_rows, right_rows))
+            candidates = self._thresholds(values, weights, min_leaf)
+            if len(candidates) == 0:
+                continue
+            keep_rows = c.smoothing > 0 or c.refine_thresholds
+            sums, per_row = self._screen(rows, weights, values, candidates, keep_rows)
+            if c.refine_thresholds:
+                every = self._thresholds(values, weights, min_leaf, use_quantiles=False, limit=False)
+                best = int(np.argmin(sums))
+                lower = candidates[best - 1] if best > 0 else -np.inf
+                upper = candidates[best + 1] if best + 1 < len(candidates) else np.inf
+                window = self._thin(every[(every > lower) & (every < upper) & ~np.isin(every, candidates)])
+                if len(window):
+                    window_sums, window_rows = self._screen(rows, weights, values, window, True)
+                    if c.smoothing > 0:
+                        candidates = np.concatenate([candidates, window])
+                        sums = np.concatenate([sums, window_sums])
+                        per_row = np.vstack([per_row, window_rows])
+                    else:
+                        refined = int(np.argmin(window_sums))
+                        hurdle = c.refine_standard_errors * self._standard_error(
+                            window_rows[refined] - per_row[best]
+                        )
+                        if sums[best] - window_sums[refined] > hurdle:
+                            candidates[best], sums[best] = window[refined], window_sums[refined]
+            if c.smoothing > 0:
+                best = int(np.argmin(sums))
+                z = np.empty(len(candidates))
+                for k in range(len(candidates)):
+                    excess = sums[k] - sums[best]
+                    error = self._standard_error(per_row[k] - per_row[best])
+                    z[k] = excess / error if error > 0 else (0.0 if excess <= 0 else np.inf)
+                pis = np.exp(-z / c.smoothing)
+                pis /= pis.sum()
+                order = np.argsort(candidates)
+                screened.append((float(sums[best]), feature, candidates[order], pis[order]))
+            else:
+                for threshold, total in zip(candidates, sums):
+                    screened.append((float(total), feature, np.array([threshold]), np.array([1.0])))
         screened.sort(key=lambda split: split[0])
         return [split[1:] for split in screened[: c.shortlist_size]]
+
+    def _screen(self, rows, weights, values, thresholds, keep_rows):
+        """Weighted regret of each threshold when each child uses its clipped
+        mean return as scores: the sums and, if asked, the per-row regrets."""
+        bound = self.config.prediction_bound
+        sums = np.empty(len(thresholds))
+        per_row = np.empty((len(thresholds), len(rows))) if keep_rows else None
+        for k, threshold in enumerate(thresholds):
+            left = values <= threshold
+            regret = np.empty(len(rows))
+            for side in (left, ~left):
+                part = rows[side]
+                score = np.clip(
+                    np.average(self._R[part], axis=0, weights=weights[side]), -bound, bound
+                )
+                regret[side] = self._regret_rows(score, part)
+            regret *= weights
+            sums[k] = regret.sum()
+            if keep_rows:
+                per_row[k] = regret
+        return sums, per_row
+
+    @staticmethod
+    def _standard_error(differences):
+        """Standard error of a sum of per-row differences (rows treated as independent)."""
+        if len(differences) < 2:
+            return 0.0
+        return float(np.std(differences, ddof=1) * np.sqrt(len(differences)))
 
     def _refit_leaves(self, leaves, scores, path, on_all_rows=False):
         """Refit every leaf score on the final holdings; keep it if Sharpe holds.
@@ -853,14 +966,15 @@ class SPOPortfolioTree:
         refit on all rows adds the checking rows, which the scores it replaces
         never saw, so it is kept whatever the Sharpe of the training path does.
         """
-        refits = [self._fit_leaf(rows, node.prediction) for node, rows, _ in leaves]
-        candidate = scores.copy()
-        for refit, (_, rows, _) in zip(refits, leaves):
-            candidate[rows] = refit.prediction
+        refits = [
+            self._fit_leaf(rows, node.prediction, weights) for node, rows, weights, _ in leaves
+        ]
+        trial = [(refit, rows, weights, 0) for refit, (_, rows, weights, _) in zip(refits, leaves)]
+        candidate = self._scores(trial, len(scores))
         refit_path = self._replay(candidate)
         kept = on_all_rows or refit_path.sharpe >= path.sharpe
         if kept:
-            for refit, (node, _, _) in zip(refits, leaves):
+            for refit, (node, _, _, _) in zip(refits, leaves):
                 node.prediction, node.regret_sum = refit.prediction, refit.regret_sum
         if self.config.verbose:
             print(
@@ -869,27 +983,34 @@ class SPOPortfolioTree:
                 f"({'always kept' if on_all_rows else 'kept' if kept else 'discarded'})"
             )
 
-    def _score_prediction(self, prediction, indices):
+    def _regret_rows(self, prediction, indices):
+        """Regret of one score vector on each of these rows, from the current holdings."""
         R, U, S = self._R[indices], self._U[indices], self._S[indices]
         weights = self.optimizer.solve(prediction, U, S)
         regret = self._benchmarks[indices] - self.optimizer.utility(R, weights, U, S)
-        if np.min(regret) < -self.config.regret_tolerance:
+        if len(regret) and np.min(regret) < -self.config.regret_tolerance:
             raise RuntimeError(
                 "Negative regret exceeds tolerance; check solver accuracy."
             )
         # Clip only negligible numerical negatives, not meaningful discrepancies.
-        return float(np.maximum(regret, 0).sum())
+        return np.maximum(regret, 0)
 
-    def _fit_leaf(self, indices, parent_prediction=None):
+    def _score_prediction(self, prediction, indices, weights=None):
+        regret = self._regret_rows(prediction, indices)
+        if weights is not None:
+            regret = regret * weights
+        return float(regret.sum())
+
+    def _fit_leaf(self, indices, parent_prediction=None, weights=None):
         # Deterministic bounded coordinate search, started from the leaf mean.
         # With fees or row-specific covariances the mean is only a starting
         # point, not the regret minimizer.
         c = self.config
         bound = c.prediction_bound
-        best = np.clip(self._R[indices].mean(axis=0), -bound, bound)
-        best_loss = self._score_prediction(best, indices)
+        best = np.clip(np.average(self._R[indices], axis=0, weights=weights), -bound, bound)
+        best_loss = self._score_prediction(best, indices, weights)
         if parent_prediction is not None:
-            loss = self._score_prediction(parent_prediction, indices)
+            loss = self._score_prediction(parent_prediction, indices, weights)
             if loss < best_loss:
                 best, best_loss = parent_prediction.copy(), loss
         # Including the parent lets a child retain its parent's prediction.
@@ -904,28 +1025,38 @@ class SPOPortfolioTree:
                 for value in np.linspace(lower, upper, c.search_grid_size):
                     candidate = best.copy()
                     candidate[asset] = value
-                    loss = self._score_prediction(candidate, indices)
+                    loss = self._score_prediction(candidate, indices, weights)
                     if loss < best_loss:
                         best, best_loss = candidate, loss
             radius /= c.search_grid_size - 1
-        return Node(best, len(indices), best_loss)
+        n_samples = len(indices) if weights is None else int(round(weights.sum()))
+        return Node(best, n_samples, best_loss)
 
-    def _thresholds(self, values):
-        unique, counts = np.unique(values, return_counts=True)
+    def _thresholds(self, values, weights=None, min_leaf=None, use_quantiles=True, limit=True):
+        """Candidate thresholds: midpoints of consecutive distinct values whose
+        two sides each carry at least min_leaf rows (weighted with soft splits)."""
+        min_leaf = self.config.min_samples_leaf if min_leaf is None else min_leaf
+        order = np.argsort(values, kind="stable")
+        sorted_values = values[order]
+        mass = np.ones(len(values)) if weights is None else weights[order]
+        unique, first = np.unique(sorted_values, return_index=True)
+        per_value = np.add.reduceat(mass, first) if len(first) else np.array([])
         thresholds = unique[:-1] / 2 + unique[1:] / 2
         # Rounding can put a midpoint on the upper endpoint: retain the intended
         # partition in that case by using the lower endpoint with the <= rule.
         thresholds = np.where(thresholds >= unique[1:], unique[:-1], thresholds)
-        left_sizes = np.cumsum(counts)[:-1]
-        valid = (left_sizes >= self.config.min_samples_leaf) & (
-            len(values) - left_sizes >= self.config.min_samples_leaf
-        )
+        left_mass = np.cumsum(per_value)[:-1]
+        valid = (left_mass >= min_leaf) & (per_value.sum() - left_mass >= min_leaf)
         thresholds = thresholds[valid]
         quantiles = self.config.threshold_quantiles
-        if quantiles is not None and len(thresholds):
+        if use_quantiles and quantiles is not None and len(thresholds):
             # Only the partitions closest to the requested quantiles of the values.
             nearest = [int(np.argmin(np.abs(thresholds - q))) for q in np.quantile(values, quantiles)]
             thresholds = thresholds[np.unique(nearest)]
+        return self._thin(thresholds) if limit else thresholds
+
+    def _thin(self, thresholds):
+        """At most max_thresholds candidates, evenly spaced by rank."""
         limit = self.config.max_thresholds
         if limit is not None and len(thresholds) > limit:
             selected = np.linspace(0, len(thresholds) - 1, limit).astype(int)
@@ -975,7 +1106,12 @@ class SPOPortfolioTree:
                     f"scores={np.round(node.prediction, 6)}"
                 )
             else:
-                print(f"{indent}if {names[node.feature]} <= {node.threshold:.6g}:")
+                soft = (
+                    f" (soft: half of the weight within a range of {node.spread:.3g})"
+                    if node.thresholds is not None
+                    else ""
+                )
+                print(f"{indent}if {names[node.feature]} <= {node.threshold:.6g}{soft}:")
                 visit(node.left, indent + "  ")
                 print(f"{indent}else:")
                 visit(node.right, indent + "  ")

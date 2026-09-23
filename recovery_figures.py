@@ -5,6 +5,8 @@
   python recovery_figures.py run     every experiment, in parallel; saves report/figures/recovery_results.json
   python recovery_figures.py run-settings   the settings experiment (risk aversion, fee, depth, quartile
                                      thresholds); saves report/figures/recovery_settings.json
+  python recovery_figures.py run-enhancements   the split-search options (quantile candidates, refinement,
+                                     soft splits); saves report/figures/recovery_enhancements.json
   python recovery_figures.py plot    the figures, from the saved results, into report/figures/
 
 Every cell of the experiment is one trading rate (days between decisions) with
@@ -55,6 +57,20 @@ SETTING_EDGES = [0.05, 0.10]
 DATASETS_PER_SETTING = 40
 SETTINGS_RESULTS = os.path.join(OUT, "recovery_settings.json")
 POSITION_BINS = np.linspace(-2.5, 2.5, 26)      # the mean position by bin of x, on the test rows
+SCORE_GRID = np.linspace(-2.5, 2.5, 51)         # the tree's score as a function of x
+
+# A third experiment: the options that change how a split is chosen (see SPOPortfolioTree).
+DECILES = tuple(float(q) for q in np.round(np.arange(0.1, 1.0, 0.1), 2))
+ENHANCEMENTS = {
+    "base": {},
+    "deciles": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10},
+    "deciles + refinement": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10,
+                             "refine_thresholds": True, "refine_standard_errors": 1.0},
+    "smoothing": {"smoothing": 1.0},
+    "deciles + refinement + smoothing": {"threshold_quantiles": DECILES, "min_leaf_fraction": 0.10,
+                                         "refine_thresholds": True, "smoothing": 1.0},
+}
+ENHANCEMENTS_RESULTS = os.path.join(OUT, "recovery_enhancements.json")
 
 
 def x_grid(case):
@@ -92,6 +108,8 @@ def job(task):
         "tag": tag, "step": case.step, "edge": case.edge, "k": case.k,
         "volatility": case.volatility, "seed": seed, "sign_change": sign_change(grid, expected),
         "grown": result["grown"], "kept": result["kept"], "n_leaves": len(result["kept"]) + 1,
+        "spreads": result["spreads"],
+        "score_profile": [float(v) for v in result["tree"].predict_returns(SCORE_GRID[:, None])[:, 0]],
         "test_mean": {name: float(path.net_returns.mean()) for name, path in paths.items()},
         "test_sharpe": {name: float(path.sharpe) for name, path in paths.items()},
         "test_turnover": {name: float(path.turnover.mean()) for name, path in paths.items()},
@@ -117,6 +135,12 @@ def all_tasks():
 def settings_tasks():
     return [("settings", replace(BASE, step=step, edge=edge, **changes), seed, {"setting": name})
             for step in SETTING_STEPS for name, changes in SETTINGS.items()
+            for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
+
+
+def enhancement_tasks():
+    return [("enhancements", replace(BASE, step=step, edge=edge, **changes), seed, {"setting": name})
+            for step in SETTING_STEPS for name, changes in ENHANCEMENTS.items()
             for edge in SETTING_EDGES for seed in range(DATASETS_PER_SETTING)]
 
 
@@ -205,25 +229,31 @@ def setting_summary(cell, step):
     s["leaves"] = float(np.mean([r["n_leaves"] for r in cell]))
     s["turnover"] = {name: float(np.mean([r["test_turnover"][name] for r in cell]))
                      for name in ("tree", "ideal rule")}
+    first = [th for r in cell for f, th in [root_of(r)] if f == "x"]
+    s["within"] = 100 * float(np.mean(np.abs(first) <= 0.25)) if first else np.nan
+    root_spreads = [r["spreads"][0] for r in cell if r.get("spreads") and root_of(r)[0] == "x"]
+    s["spread"] = float(np.mean(root_spreads)) if root_spreads else 0.0
     return s
 
 
-def print_settings_summary(results):
+def print_settings_summary(results, names, title):
     for edge in SETTING_EDGES:
-        print(f"\nsettings experiment, edge {edge:g}, {DATASETS_PER_SETTING} datasets per cell")
-        print(f"{'setting':>20} {'rate':>14} {'leaves':>6} {'on x':>5} {'none':>5} {'median':>7} "
-              f"{'tree':>6} {'ideal':>6} {'captured':>9} {'turnover':>16}")
-        for name in SETTINGS:
+        print(f"\n{title}, edge {edge:g}, {DATASETS_PER_SETTING} datasets per cell")
+        print(f"{'setting':>32} {'rate':>14} {'leaves':>6} {'on x':>5} {'none':>5} {'median':>7} "
+              f"{'quartiles':>15} {'<=.25':>5} {'spread':>6} {'tree':>6} {'ideal':>6} {'captured':>9} {'turnover':>14}")
+        for name in names:
             for step in SETTING_STEPS:
                 cell = setting_records(results, name, step, edge)
                 if not cell:
                     continue
                 s = setting_summary(cell, step)
-                print(f"{name:>20} {RATE_NAMES[step]:>14} {s['leaves']:>6.2f} {s['on_x']:>5.0f} "
-                      f"{s['none']:>5.0f} {s['median']:>+7.2f} {s['sharpe']['tree']:>6.2f} "
+                print(f"{name:>32} {RATE_NAMES[step]:>14} {s['leaves']:>6.2f} {s['on_x']:>5.0f} "
+                      f"{s['none']:>5.0f} {s['median']:>+7.2f} {s['quartiles'][0]:>+7.2f}{s['quartiles'][1]:>+8.2f} "
+                      f"{s['within']:>5.0f} {s['spread']:>6.2f} {s['sharpe']['tree']:>6.2f} "
                       f"{s['sharpe']['ideal rule']:>6.2f} {s['captured']:>9.0f} "
-                      f"{s['turnover']['tree']:>7.2f} ({s['turnover']['ideal rule']:.2f})")
-    print("\nleaves: mean number of leaves kept; turnover: per decision, tree (ideal rule in brackets).")
+                      f"{s['turnover']['tree']:>6.2f} ({s['turnover']['ideal rule']:.2f})")
+    print("\nleaves: mean number of leaves kept; <=.25: share of first thresholds within 0.25 of d; "
+          "spread: mean spread of the root split (soft splits); turnover: per decision, tree (ideal rule in brackets).")
 
 
 # ----------------------------------------------------------------------------- figures
@@ -500,10 +530,10 @@ def figure_thresholds_by_rate(results, plt):
     return fig
 
 
-def figure_settings_positions(results, plt, step=5):
+def figure_settings_positions(results, plt, names, step=5):
     """Mean test position by x: the tree (median and quartiles over datasets) against the ideal rule."""
-    names = list(SETTINGS)
-    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 13), sharex=True, sharey=True)
+    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 2.2 * len(names) + 0.8),
+                             sharex=True, sharey=True)
     centers = (POSITION_BINS[:-1] + POSITION_BINS[1:]) / 2
     for j, name in enumerate(names):
         for i, edge in enumerate(SETTING_EDGES):
@@ -536,8 +566,7 @@ def figure_settings_positions(results, plt, step=5):
     return fig
 
 
-def figure_settings_maps(results, plt, edge=0.10):
-    names = list(SETTINGS)
+def figure_settings_maps(results, plt, names, edge=0.10, title="The settings experiment"):
     shape = (len(SETTING_STEPS), len(names))
     captured, tree, ideal, leaves, turnover, turn_ideal = (np.full(shape, np.nan) for _ in range(6))
     for i, step in enumerate(SETTING_STEPS):
@@ -549,7 +578,7 @@ def figure_settings_maps(results, plt, edge=0.10):
             captured[i, j], leaves[i, j] = s["captured"], s["leaves"]
             tree[i, j], ideal[i, j] = s["sharpe"]["tree"], s["sharpe"]["ideal rule"]
             turnover[i, j], turn_ideal[i, j] = s["turnover"]["tree"], s["turnover"]["ideal rule"]
-    labels = [n.replace(", ", "\n") for n in names]
+    labels = [n.replace(", ", "\n").replace(" + ", "\n+ ") for n in names]
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     axes = axes.ravel()
     heatmap(axes[0], captured, "test gain over the tree without splits,\nas % of the ideal rule's gain",
@@ -564,9 +593,69 @@ def figure_settings_maps(results, plt, edge=0.10):
             max(1.0, np.nanmax(turnover)), labels, "", SETTING_STEPS)
     for axis in axes[:2]:
         axis.set_ylabel("trading rate", fontsize=9.5)
-    fig.suptitle(f"The settings experiment at edge {edge:g} ({DATASETS_PER_SETTING} datasets per cell)",
-                 fontsize=11)
+    fig.suptitle(f"{title} at edge {edge:g} ({DATASETS_PER_SETTING} datasets per cell)", fontsize=11)
     fig.tight_layout()
+    return fig
+
+
+def figure_scores(results, plt, names, step=5, edge=0.10):
+    """The tree's score for the asset as a function of x: median and quartiles over datasets."""
+    rows_ = (len(names) + 1) // 2
+    fig, axes = plt.subplots(rows_, 2, figsize=(9, 3.1 * rows_), sharey=True, sharex=True)
+    axes = np.atleast_1d(axes).ravel()
+    for axis in axes[len(names):]:
+        axis.set_visible(False)
+    for axis, name in zip(axes, names):
+        cell = setting_records(results, name, step, edge)
+        if not cell:
+            continue
+        scores = np.array([r["score_profile"] for r in cell])
+        low, mid, high = np.percentile(scores, [25, 50, 75], axis=0)
+        axis.fill_between(SCORE_GRID, low, high, color=ORANGE, alpha=0.25, lw=0,
+                          label="quartiles over datasets")
+        axis.plot(SCORE_GRID, mid, color=ORANGE, lw=2, label="median over datasets")
+        axis.axhline(0, color="black", lw=0.6)
+        axis.axvline(BASE.d, color="black", ls=":", lw=1)
+        s = setting_summary(cell, step)
+        axis.set_title(f"{name}\nmedian threshold {s['median']:+.2f}, spread {s['spread']:.2f}", fontsize=9)
+        axis.set_xlabel("x on the decision day")
+    for axis in axes[0::2]:
+        axis.set_ylabel("score of the asset given by the tree")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=2, fontsize=9, frameon=False)
+    fig.suptitle(f"What the tree says as a function of x ({RATE_NAMES[step]} decisions, edge {edge:g}, "
+                 f"{DATASETS_PER_SETTING} datasets per panel)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    return fig
+
+
+def figure_thresholds_by_setting(results, plt, names, step=5):
+    """Histograms of the first threshold on x, one row per setting, one column per edge."""
+    fig, axes = plt.subplots(len(names), len(SETTING_EDGES), figsize=(8.5, 2.1 * len(names) + 0.8),
+                             sharex=True, sharey="row")
+    bins = np.linspace(-1.5, 1.5, 31)
+    for j, name in enumerate(names):
+        for i, edge in enumerate(SETTING_EDGES):
+            axis = axes[j, i]
+            cell = setting_records(results, name, step, edge)
+            if not cell:
+                continue
+            first = [th for r in cell for f, th in [root_of(r)] if f == "x"]
+            axis.hist(np.clip(first, bins[0], bins[-1]), bins=bins, color=ORANGE, label="first split on x")
+            axis.axvline(BASE.d, color="black", ls="--", lw=1.2, label=f"planted d = {BASE.d:g}")
+            s = setting_summary(cell, step)
+            axis.set_title(f"{name}, edge {edge:g}\non x {s['on_x']:.0f}%, median {s['median']:+.2f} "
+                           f"[{s['quartiles'][0]:+.2f}, {s['quartiles'][1]:+.2f}], within 0.25: {s['within']:.0f}%",
+                           fontsize=8)
+            if i == 0:
+                axis.set_ylabel("datasets")
+            if j == len(names) - 1:
+                axis.set_xlabel("first threshold on x")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=2, fontsize=9, frameon=False)
+    fig.suptitle(f"Where the first threshold lands ({RATE_NAMES[step]} decisions, "
+                 f"{DATASETS_PER_SETTING} datasets per panel)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.98))
     return fig
 
 
@@ -604,9 +693,19 @@ def plot():
     if os.path.exists(SETTINGS_RESULTS):
         with open(SETTINGS_RESULTS) as handle:
             settings = json.load(handle)
-        print_settings_summary(settings)
-        figures.update({"recovery_settings_positions": figure_settings_positions(settings, plt),
-                        "recovery_settings_maps": figure_settings_maps(settings, plt)})
+        print_settings_summary(settings, list(SETTINGS), "settings experiment")
+        figures.update({"recovery_settings_positions": figure_settings_positions(settings, plt, list(SETTINGS)),
+                        "recovery_settings_maps": figure_settings_maps(settings, plt, list(SETTINGS))})
+    if os.path.exists(ENHANCEMENTS_RESULTS):
+        with open(ENHANCEMENTS_RESULTS) as handle:
+            enhancements = json.load(handle)
+        names = list(ENHANCEMENTS)
+        print_settings_summary(enhancements, names, "enhancements experiment")
+        figures.update({
+            "recovery_enhancements_scores": figure_scores(enhancements, plt, names),
+            "recovery_enhancements_thresholds": figure_thresholds_by_setting(enhancements, plt, names),
+            "recovery_enhancements_maps": figure_settings_maps(enhancements, plt, names,
+                                                              title="The enhancements experiment")})
     for name, fig in figures.items():
         fig.savefig(os.path.join(OUT, name + ".pdf"))
         fig.savefig(os.path.join(OUT, name + ".png"), dpi=130)
@@ -632,6 +731,8 @@ if __name__ == "__main__":
         run(all_tasks(), RESULTS)
     elif command == "run-settings":
         run(settings_tasks(), SETTINGS_RESULTS)
+    elif command == "run-enhancements":
+        run(enhancement_tasks(), ENHANCEMENTS_RESULTS)
     elif command == "plot":
         plot()
     else:

@@ -45,14 +45,17 @@ class SplitProbe(SPOPortfolioTree):
     def _best_split(self, leaves, scores, sharpe):
         first_round = not hasattr(self, "candidates")
         if first_round:
-            node, rows, _ = leaves[0]
+            node, rows, weights, _ = leaves[0]
             self.stale_prediction = node.prediction.copy()
-            parent = self._fit_leaf(rows, node.prediction)
+            parent = self._fit_leaf(rows, node.prediction, weights)
             self.refitted_prediction = parent.prediction.copy()
             self.sharpe_before, self.candidates, self.fallbacks = sharpe, [], []
-            for feature, threshold, left_rows, right_rows in self._shortlist(rows):
-                left = self._fit_leaf(left_rows, parent.prediction)
-                right = self._fit_leaf(right_rows, parent.prediction)
+            for feature, thresholds, _ in self._shortlist(rows, weights):
+                threshold = float(thresholds[0])            # hard splits: one threshold each
+                on_left = self._X[rows, feature] <= threshold
+                left_rows, right_rows = rows[on_left], rows[~on_left]
+                left = self._fit_leaf(left_rows, parent.prediction, weights[on_left])
+                right = self._fit_leaf(right_rows, parent.prediction, weights[~on_left])
                 replayed = scores.copy()
                 replayed[left_rows], replayed[right_rows] = left.prediction, right.prediction
                 self.candidates.append({
@@ -64,10 +67,10 @@ class SplitProbe(SPOPortfolioTree):
         self.recording = False
         return choice
 
-    def _fit_leaf(self, indices, parent_prediction=None):
+    def _fit_leaf(self, indices, parent_prediction=None, weights=None):
         if getattr(self, "recording", False):
             self.fallbacks.append((len(indices), parent_prediction.copy()))
-        return super()._fit_leaf(indices, parent_prediction)
+        return super()._fit_leaf(indices, parent_prediction, weights)
 
 
 def probed_tree():
@@ -183,8 +186,8 @@ class PathAwareTreeTest(unittest.TestCase):
                 self.refitting = True
                 super()._refit_leaves(leaves, scores, path)
 
-            def _fit_leaf(self, indices, parent_prediction=None):
-                node = super()._fit_leaf(indices, parent_prediction)
+            def _fit_leaf(self, indices, parent_prediction=None, weights=None):
+                node = super()._fit_leaf(indices, parent_prediction, weights)
                 if getattr(self, "refitting", False):
                     node.prediction = -node.prediction
                 return node
@@ -293,8 +296,8 @@ class PruningTest(unittest.TestCase):
                 super()._prune(*args)
                 self.pruning = False
 
-            def _fit_leaf(self, indices, parent_prediction=None):
-                node = super()._fit_leaf(indices, parent_prediction)
+            def _fit_leaf(self, indices, parent_prediction=None, weights=None):
+                node = super()._fit_leaf(indices, parent_prediction, weights)
                 if getattr(self, "pruning", False):
                     self.single_leaves.append((len(indices), node.prediction.copy()))
                 return node
@@ -368,7 +371,7 @@ class PruningTest(unittest.TestCase):
         class Recorder(SPOPortfolioTree):
             def _refit_leaves(self, leaves, scores, path, on_all_rows=False):
                 self.refitted = getattr(self, "refitted", []) + [
-                    sum(len(rows) for _, rows, _ in leaves)]
+                    sum(len(rows) for _, rows, _, _ in leaves)]
                 super()._refit_leaves(leaves, scores, path, on_all_rows)
 
         X, returns, covariance, _ = regime_data(seed=0, weeks=WEEKS)
@@ -394,7 +397,7 @@ class PruningTest(unittest.TestCase):
                 super()._refit_leaves(leaves, scores, path, on_all_rows)
                 if on_all_rows:
                     refitted = scores.copy()
-                    for leaf, rows, _ in leaves:
+                    for leaf, rows, _, _ in leaves:
                         refitted[rows] = leaf.prediction
                     self.sharpe_before = path.sharpe
                     self.sharpe_after = self._replay(refitted).sharpe
@@ -409,6 +412,70 @@ class PruningTest(unittest.TestCase):
         X, returns, covariance, _ = regime_data(seed=0)
         with self.assertRaises(ValueError):
             make_tree(validation_fraction=0.5).fit(X[:3], returns[:3], covariance)
+
+
+
+class SoftSplitOptionsTest(unittest.TestCase):
+    """The options that extend the plain tree: quantile candidates with a minimum
+    leaf fraction and a local refinement, and soft (Boltzmann-weighted) splits."""
+
+    @staticmethod
+    def step_data(true_threshold=0.26, n=300, noise=0.0, seed=0):
+        rng = np.random.default_rng(seed)
+        x = np.sort(rng.uniform(-1, 1, n))
+        returns = np.column_stack([np.where(x > true_threshold, 0.02, -0.02)
+                                   + noise * rng.normal(size=n), np.zeros(n)])
+        return x[:, None], returns, 1e-4 * np.eye(2)
+
+    def test_membership_is_the_weight_of_the_thresholds_at_or_above_x(self):
+        m = SPOPortfolioTree._membership_of(np.array([0.0, 1.0]), np.array([0.5, 0.5]),
+                                            np.array([-1.0, 0.0, 0.5, 1.0, 2.0]))
+        np.testing.assert_allclose(m, [1.0, 1.0, 0.5, 0.5, 0.0])
+        hard = SPOPortfolioTree._membership_of(np.array([0.3]), np.array([1.0]), np.array([0.3, 0.31]))
+        np.testing.assert_allclose(hard, [1.0, 0.0])
+
+    def test_min_leaf_fraction_bounds_the_partitions(self):
+        tree = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()),
+                                TreeConfig(min_samples_leaf=5, min_leaf_fraction=0.3, max_thresholds=None))
+        thresholds = tree._thresholds(np.arange(100.0), None, tree._min_leaf(100))
+        self.assertEqual((thresholds.min(), thresholds.max(), len(thresholds)), (29.5, 69.5, 41))
+
+    def test_refinement_finds_the_threshold_between_two_deciles(self):
+        X, returns, covariance = self.step_data()
+        deciles = tuple(np.arange(0.1, 1.0, 0.1))
+        coarse = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, max_thresholds=None, threshold_quantiles=deciles)).fit(X, returns, covariance)
+        fine = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, max_thresholds=None, threshold_quantiles=deciles,
+            refine_thresholds=True)).fit(X, returns, covariance)
+        self.assertGreater(abs(coarse.root.threshold - 0.26), 0.05)     # a decile of a uniform sample
+        self.assertLess(abs(fine.root.threshold - 0.26), 0.02)          # the midpoint between the two nearest x
+        self.assertIsNone(fine.root.thresholds)                          # still a hard split
+
+    def test_a_soft_split_with_a_tiny_smoothing_is_the_hard_split(self):
+        X, returns, covariance = self.step_data(noise=0.01)
+        hard = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10)).fit(X, returns, covariance)
+        soft = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, smoothing=1e-9)).fit(X, returns, covariance)
+        self.assertEqual(soft.root.threshold, hard.root.threshold)
+        self.assertGreater(soft.root.weights.max(), 0.999)
+        np.testing.assert_allclose(soft.predict_returns(X), hard.predict_returns(X), atol=1e-9)
+
+    def test_a_soft_split_gives_scores_that_vary_continuously_with_x(self):
+        X, returns, covariance = self.step_data(noise=0.03, n=400)
+        soft = SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(
+            max_depth=1, min_samples_leaf=10, smoothing=1.0)).fit(X, returns, covariance)
+        self.assertIsNotNone(soft.root.thresholds)
+        self.assertGreater(soft.root.spread, 0.0)
+        grid = np.linspace(-1, 1, 401)[:, None]
+        scores = soft.predict_returns(grid)[:, 0]
+        self.assertGreater(len(np.unique(np.round(scores, 6))), 2)      # not just two leaf values
+        self.assertTrue(np.all(np.diff(scores) >= -1e-12))              # monotone in x
+        low, high = soft.root.left.prediction[0], soft.root.right.prediction[0]
+        self.assertTrue(np.all(scores >= min(low, high) - 1e-12) and np.all(scores <= max(low, high) + 1e-12))
+        with self.assertRaises(ValueError):
+            SPOPortfolioTree(PortfolioOptimizer(2, PortfolioConfig()), TreeConfig(refine_thresholds=True))
 
 
 if __name__ == "__main__":
