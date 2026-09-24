@@ -81,13 +81,23 @@ Given scores $c\in\R^n$, holdings $u$ and a covariance $\Sigma$, the portfolio i
 w^\star(c;u,\Sigma)=\argmax_{w\in\W}\;c^\top w-f^\top|w-u|-\lambda\,w^\top\Sigma w,
 \qquad \W=\{w\in\R^n:\ 0\le w_i\le\bar w,\ \1^\top w=1\}.
 \end{equation}
-It is solved exactly: at the optimum each weight is at $0$, at $\bar w$, at $u_i$ (the fee puts a kink there) or free on one side of $u_i$; each of the $5^n$ patterns gives a small linear system, every admissible solution is feasible, and the best one is the unique optimum since the objective is strictly concave. All rows are solved in one vectorised call (\code{PortfolioOptimizer.solve}).
+It is solved exactly. At the optimum each weight $w_i$ is in one of five states: at $0$, at $\bar w$, at $u_i$ (the fee makes the objective kinked there, so a whole range of scores leaves $w_i$ where it is), strictly above $u_i$ (buying) or strictly below $u_i$ (selling). In the last two states the weight is \emph{free}: no bound and no kink pins it, so with the Lagrangian $L(w,\nu)=c^\top w-f^\top|w-u|-\lambda w^\top\Sigma w-\nu(\1^\top w-1)$, $\nu$ the multiplier of the budget constraint, it obeys $\partial L/\partial w_i=0$, that is $c_i\mp f_i-2\lambda(\Sigma w)_i=\nu$ with the sign of the fee known from the state; $\partial L/\partial\nu=0$ is the budget itself. At the optimum all free assets thus share the same marginal net gain $\nu$. Fixing the state of every asset ($5^n$ combinations) turns these equations into a linear system for the free weights and $\nu$; the solver tries every combination, keeps those whose solution respects its own assumptions (free weights on the assumed side of $u_i$, all weights within the bounds and summing to 1) and takes the best objective among them, which is the unique optimum since the objective is strictly concave and the optimum is one of the cases. All rows are solved in one vectorised call (\code{PortfolioOptimizer.solve}).
 
 With two assets (asset $a$ and $b$, holding $v$ of $a$, $\Delta c=c_a-c_b$, $\phi=f_a+f_b$, $\kappa=2\lambda(\sigma_a^2+\sigma_b^2-2\sigma_{ab})$, minimum-variance weight $\bar a$ and $D=\Delta c-\kappa(v-\bar a)$):
 \begin{equation}\label{eq:twoasset}
 w_a=\begin{cases} v & |D|\le\phi\quad\text{(no trade)},\\[2pt] \bar a+\dfrac{\Delta c-\phi\,\mathrm{sign}(D)}{\kappa} & \text{otherwise,}\end{cases}\qquad\text{clipped to }[1-\bar w,\bar w].
 \end{equation}
 So a leaf acts through one number $\Delta c$, the position is linear in it with slope $1/\kappa$, and the no-trade band has half-width $\phi$. Only differences between scores matter: $w^\star(c+\alpha\1)=w^\star(c)$.
+
+\textbf{Asset against cash} (the case of the experiments): $\sigma_b^2=\varepsilon\approx0$ and $\sigma_{ab}=0$, so $\bar a\approx0$, $\kappa=2\lambda\sigma_h^2$ with $\sigma_h^2$ the $h$-day variance of the asset, $\phi=f$ its fee, and $\Delta c=c$ its score (cash has score 0). With $u$ the asset's weight before the decision, the problem is $\max_{0\le w\le1}\,c\,w-f|w-u|-\lambda\sigma_h^2w^2$ and
+\begin{equation}\label{eq:cash}
+w^\star=\begin{cases}
+\min\{(c-f)/\kappa,\,1\} & c-\kappa u>f\quad\text{(buy)},\\
+\max\{(c+f)/\kappa,\,0\} & c-\kappa u<-f\quad\text{(sell)},\\
+u & |c-\kappa u|\le f\quad\text{(no trade)}.
+\end{cases}
+\end{equation}
+All positions between 0 and 1 correspond to a score window of width $\kappa$ (from $c=f$ to $c=\kappa+f$ when buying from cash). At $\lambda=1$, weekly decisions and $\sigma=1\%$ a day, $\kappa=2\cdot5\cdot10^{-4}=0.1\%$: leaf scores of a few tenths of a percent a week put the position at 0 or 1, which is why the experiments report finds bang-bang positions at $\lambda=1$ and gradual ones at $\lambda=5$--$10$ ($\kappa=0.5$--$1\%$).
 
 \section{The loss: decision regret}\label{sec:loss}
 The utility of a decision $w$ in row $t$ and the regret of scores $c$ are

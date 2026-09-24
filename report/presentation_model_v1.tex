@@ -13,6 +13,7 @@
 \definecolor{navy}{RGB}{31,78,156}
 \definecolor{brick}{RGB}{192,57,43}
 \definecolor{leaf}{RGB}{46,139,87}
+\definecolor{figorange}{RGB}{230,126,34}
 \setbeamercolor{structure}{fg=navy}
 \setbeamercolor{title}{fg=navy}
 \setbeamercolor{frametitle}{fg=navy}
@@ -39,7 +40,7 @@
 
 \title{The SPO portfolio tree: model v1}
 \subtitle{What it is, how it is trained, and what the planted-threshold experiments say}
-\author{G.~G.~Macqueron}
+\author{Roman Beauvallet - Edo Theory}
 \date{24 September 2026}
 
 \begin{document}
@@ -47,7 +48,7 @@
 \begin{frame}[plain]
 \titlepage
 \begin{center}\scriptsize\color{black!60}
-Documents: \code{model_and_training_pipeline.tex} (the model), \code{experiments_planted_threshold.tex} and \code{experiments_regime_volatility.tex} (the experiments), \code{model_history.md} (the dated history). Code: \code{code/spo_tree.py}.
+Documents: \code{model_and_training_pipeline.tex} (the model), \code{experiments_planted_threshold.tex} and \code{experiments_regime_volatility.tex} (the experiments), \code{model_history.md} (the dated history). Main Code: \code{code/spo_tree.py}.
 \end{center}
 \end{frame}
 
@@ -60,11 +61,11 @@ Documents: \code{model_and_training_pipeline.tex} (the model), \code{experiments
 \medskip
 \textbf{The bet} (\code{motivations.md}). A small tree that
 \begin{itemize}
-\item learns \emph{decision boundaries} (regimes) rather than a return surface,
+\item learns \emph{regimes} rather than a return manifold,
 \item is trained on the \emph{decision regret} through the optimizer it feeds,
 \item is judged on its own \emph{traded path}, fees included,
 \end{itemize}
-will be more stable and more implementable than a larger predictor. The large neural network is the benchmark to beat later; it has not been run.
+will be more stable, more implementable and interpretable than a larger predictor like a big DNN. 
 
 \column{0.42\textwidth}
 \begin{block}{What exists today}
@@ -75,28 +76,108 @@ will be more stable and more implementable than a larger predictor. The large ne
 \item a frozen configuration, \textbf{model v1}, validated on 100 datasets.
 \end{itemize}
 \end{block}
-\small Not yet: real data, decoy features at market-sized signals, the neural benchmark.
+%\small Not yet: real data, decoy features at market-sized signals, the neural benchmark.
 \end{columns}
 \end{frame}
 
 % ---------------------------------------------------------------------------------------------------
-\begin{frame}{The decision: mean--variance with proportional fees}
-Given scores $c\in\R^n$ (one per asset), the current holdings $u$ and a covariance $\Sigma$ estimated from the past,
-\begin{equation*}
-w^\star(c;u,\Sigma)=\argmax_{w\in\W}\;c^\top w-f^\top|w-u|-\lambda\,w^\top\Sigma w,
-\qquad \W=\{w:\ 0\le w_i\le\bar w,\ \1^\top w=1\}.
-\end{equation*}
-Solved exactly: each weight is at $0$, at $\bar w$, at $u_i$ (the fee kinks there) or free; the $5^n$ patterns are enumerated and the best feasible one is the unique optimum (strictly concave objective).
+\begin{frame}{What the tree is, and what its nodes store}
+\begin{columns}[T]
+\column{0.57\textwidth}
+\centering
+\begin{tikzpicture}[
+  scale=0.74, every node/.style={transform shape, font=\footnotesize},
+  split/.style={draw, thick, rounded corners=2pt, fill=navy!10, align=center, inner sep=4pt},
+  leaf/.style={draw, thick, rounded corners=2pt, fill=leaf!15, align=center, inner sep=4pt},
+  arr/.style={-{Stealth[length=2mm]}, thick}]
+\node[split] (root) {\textbf{split node}, depth k\\ question: is $x_1\le\theta_0$ ?\\ {\scriptsize stores $j=1$, $\theta_0$, two children}};
+\node[leaf, below left=0.8cm and -0.2cm of root] (A) {\textbf{leaf A}\\ score $\hat c_A=(\hat c_A,\,0)$\\ {\scriptsize + rows reached, leaf regret}};
+\node[split, below right=0.8cm and -0.2cm of root] (S1) {split node, depth k+1\\ is $x_2\le\theta_1$ ?\\ {\scriptsize stores $j=2$, $\theta_1$, two children}};
+\node[leaf, below left=0.8cm and -1.0cm of S1] (B) {\textbf{leaf B}\\ score $\hat c_B$};
+\node[leaf, below right=0.8cm and -1.0cm of S1] (C) {\textbf{leaf C}\\ score $\hat c_C$};
+\draw[arr] (root) -- node[left, font=\scriptsize] {yes} (A);
+\draw[arr] (root) -- node[right, font=\scriptsize] {no} (S1);
+\draw[arr] (S1) -- node[left, font=\scriptsize] {yes} (B);
+\draw[arr] (S1) -- node[right, font=\scriptsize] {no} (C);
+\end{tikzpicture}
 
 \medskip
-\textbf{Two assets} (asset against cash, $\Delta c=c_a-c_b$, $\phi=f_a+f_b$, $\kappa=2\lambda\sigma_h^2$):
-\begin{equation*}
-w_a=\begin{cases} u_a & |D|\le\phi\quad\text{(no trade)}\\[2pt] \bar a+\dfrac{\Delta c-\phi\,\mathrm{sign}(D)}{\kappa} & \text{otherwise}\end{cases}
-\qquad\text{clipped to }[0,1],\quad D=\Delta c-\kappa(u_a-\bar a).
-\end{equation*}
-\begin{block}{Consequence at $\lambda=1$, weekly, $\sigma=1\%$ a day}
-The position is linear in $\Delta c$ with slope $1/\kappa$, and $\kappa=2\cdot5\cdot(1\%)^2=0.1\%$. A leaf score of $\pm1\%$ sits far outside that window: \alert{positions are 0 or 1}. The fee gives a no-trade band of half-width $\phi=3$~bp. Interior positions need $\lambda\ge5$ (Section~8 of the experiments report); v1 keeps $\lambda=1$ on purpose: at this stage the tree is a regime classifier, not a position sizer.
-\end{block}
+\begin{tikzpicture}[scale=0.74, every node/.style={transform shape, font=\scriptsize},
+  box/.style={draw, rounded corners=2pt, inner sep=3pt, fill=black!4}, arr/.style={-{Stealth[length=1.6mm]}, thick}]
+\node[box] (x) {date $t$: $x_t$};
+\node[box, right=0.25cm of x] (route) {questions};
+\node[box, right=0.25cm of route] (leaf) {leaf $\ell$: $\hat c_\ell$};
+\node[box, right=0.25cm of leaf] (opt) {optimizer $(u_t,\Sigma_t)$};
+\node[box, right=0.25cm of opt] (w) {$w_t$};
+\draw[arr] (x) -- (route); \draw[arr] (route) -- (leaf); \draw[arr] (leaf) -- (opt); \draw[arr] (opt) -- (w);
+\end{tikzpicture}
+
+{\scriptsize How a date is used: answer the questions from the root down, read the leaf's score, let the optimizer turn it into weights from that date's holdings.}
+\column{0.41\textwidth}
+\footnotesize
+\textbf{A tree} is a chain of yes/no questions on the features, ``is $x_j\le\theta$?'', ending in leaves. The root is the first question; a deeper split node is a question asked only of the rows that reached it; a leaf asks nothing.
+\begin{itemize}
+\item \textbf{A split node} (the root included) stores a feature index $j$, a threshold $\theta$ and its two children: yes goes left, no goes right. No score.
+\item \textbf{A leaf} stores one score vector $\hat c_\ell$ (asset score, cash at 0), fed to the optimizer for every date that reaches it, plus the number of training rows it received and their leaf regret.
+\item \textbf{Holdings, weights and returns belong to dates}, not to nodes: the tree stores no path.
+\item Depth at most 3 (v1): at most 8 leaves, hence at most 8 scores. Growth turns one leaf into a split node with two new leaves, we add one leaf at each growth step; pruning does the reverse.
+\end{itemize}
+\end{columns}
+\end{frame}
+% ---------------------------------------------------------------------------------------------------
+\begin{frame}{Notation}
+\textbf{Notation}
+\begin{itemize}
+\item $r_t$ the realised $h$-day returns of the assets at decision $t$; cash has zero return.
+\item $w_t\in\R^n$: the weights to be decided, including cash; $w\in\W$ (long-only, fully invested, cash included).
+\item $u\in\R^n$: the weights held \emph{before} the decision, i.e.\ the previous portfolio after the drift of the period, $u_{t+1}=w_t\circ(1+r_t)/(1+r_t^\top w_t)$; $u_1=\1/n$.
+\item $c\in\R^n$: the tree's scores, one per asset; cash has score $0$.
+\item $\Sigma$: covariance of the $h$-day returns, from the past only: $h\times$ the covariance of the last 180 daily returns, plus $\varepsilon I$ ($\varepsilon=10^{-6}$); for the asset, $\sigma_h^2=h\,\hat\sigma^2$.
+\item $f\in\R^n_{\ge0}$: fee per unit of traded notional (3 bp on the asset, 0 on cash)
+\item $\lambda>0$: risk aversion (1 in v1)
+\item $\bar w$: cap per asset (=1).
+\end{itemize}
+\end{frame}
+% ---------------------------------------------------------------------------------------------------
+\begin{frame}{The decision problem: notation and the exact solver}
+\footnotesize
+\textbf{The problem}, one decision every $h$ days over $n$ assets (here a coin and cash, $n=2$):
+\[
+w^\star(c;u,\Sigma)=\argmax_{w\in\W}\left(c^\top w -f^\top|w-u| - \lambda\,w^\top\Sigma w \right),
+\quad \W=\{w\in\R^n:\ 0\le w_i\le\bar w,\ \textstyle\sum_iw_i=1\}
+\]
+Strictly concave ($\lambda>0$, $\Sigma\succ0$): one maximizer. Adding a constant to every score changes nothing (it only shifts the objective by a constant), since $1^\top w=1$: only score differences matter $\implies n-1$ degrees of freedom, feature is useful only if it shares relative returns information. \newline
+
+\textbf{Exact solution by enumeration.} Lagrangian, with $\nu$ the multiplier of the budget: $L(w,\nu)=c^\top w-f^\top|w-u|-\lambda w^\top\Sigma w-\nu(\1^\top w-1)$. At the maximum each weight $w_i$ is in one of five states: at $0$; at $\bar w$; at $u_i$ (no trade in $i$: the fee kinks the objective there, so a whole range of scores leaves $w_i$ in place); strictly above $u_i$ (buying); strictly below $u_i$ (selling). In the last two the weight is \emph{free}: no bound and no kink pins it, so $\partial L/\partial w_i=0$ with the fee's sign known,
+\[
+c_i\mp f_i-2\lambda(\Sigma w)_i=\nu\quad\text{for every free asset } i,\qquad \partial L/\partial\nu=0 \iff \ \textstyle\sum_iw_i=1,
+\]
+so at the optimum all free assets share the same marginal net gain $\nu$. Fixing the state of every asset ($5^n$ cases) turns these equations into a linear system for the free weights and $\nu$. The solver takes the best objective among them: the optimum is found exactly, for all rows at once (\code{PortfolioOptimizer.solve}).
+\end{frame}
+
+% ---------------------------------------------------------------------------------------------------
+\begin{frame}{Two assets: the exact solution in one line}
+\small
+Asset weight $w$, cash $1-w$ (cash: zero return, zero fee, variance $\approx0$). With $c$ the asset's score and $u$ its weight before the decision, the problem is one-dimensional:
+\[
+\max_{0\le w\le1}\ g(w)=c\,w-f\,|w-u|-\lambda\sigma_h^2\,w^2,\qquad \kappa:=2\lambda\sigma_h^2 .
+\]
+Away from the kink $g'(w)=c\mp f-\kappa w$ (minus when buying, $w>u$; plus when selling, $w<u$); at the kink, $u$ is optimal when $0$ lies between the two one-sided derivatives. Hence
+\[
+w^\star=\begin{cases}
+\min\big\{\frac{c-f}{\kappa},\,1\big\} & \text{if } c-\kappa u>f \quad\text{(buy)}\\[5pt]
+\max\big\{\frac{c+f}{\kappa},\,0\big\} & \text{if } c-\kappa u<-f \quad\text{(sell)}\\[5pt]
+u & \text{if } |c-\kappa u|\le f \quad\text{(no trade)}.
+\end{cases}
+\]
+\begin{columns}[T]
+\column{0.47\textwidth}
+\footnotesize
+\textbf{Reading.} The fee-free target is $c/\kappa$: the position is linear in the score with slope $1/\kappa$, so all positions between 0 and 1 correspond to a score window of width $\kappa$ (from $c=f$ to $c=\kappa+f$ when buying from cash). The fee shifts the target by $f/\kappa$ towards the current holding and opens a no-trade band, $|c-\kappa u|\le f$ in score units, $f/\kappa$ in weight units.
+\column{0.51\textwidth}
+\footnotesize
+\textbf{At v1's values} ($\lambda=1$, $\sigma=1\%$ a day, weekly, $f=3$ bp): $\sigma_h^2=5\times10^{-4}$ and $\kappa=10^{-3}$, so the position goes from 0 to 1 as the score goes from $0.03\%$ to $0.13\%$ a week. The tree's leaf scores are $\pm0.3$ to $0.5\%$ a week: \alert{positions are 0 or 1}, and the no-trade band ($0.3$ in weight units) hardly ever binds. With $\lambda=10$, $\kappa=1\%$ and the same scores give interior positions, the gradual profiles of Section~8. v1 keeps $\lambda=1$: at this stage the tree is a regime classifier, not a position sizer.
+\end{columns}
 \end{frame}
 
 % ---------------------------------------------------------------------------------------------------
@@ -143,7 +224,7 @@ u_{t+1}=\frac{w_t\circ(1+r_t)}{1+r_t^\top w_t},
 and the path's Sharpe ratio is $S=\mathrm{mean}(\pi)/\mathrm{std}(\pi)$ per decision ($0$ for an all-cash path). Fees are paid on real trades from drifted holdings.
 
 \column{0.46\textwidth}
-\textbf{Growth: two in-sample gates.} A candidate split is ranked by its regret reduction $\Delta=L_\ell(\hat c_\ell)-L_{\mathrm{left}}(\hat c_{\mathrm{left}})-L_{\mathrm{right}}(\hat c_{\mathrm{right}})$ (SPOT's criterion) and \emph{accepted only if the replayed Sharpe ratio of the whole tree rises}.
+\textbf{Growth: two in-sample gates.} A candidate split is ranked by its regret reduction $\Delta=L_\ell(\hat c_\ell)-L_{\mathrm{left}}(\hat c_{\mathrm{left}})-L_{\mathrm{right}}(\hat c_{\mathrm{right}})$ and accepted only if the replayed Sharpe ratio of the whole tree rises.
 
 \medskip
 \textbf{Pruning: one out-of-sample judge.} The last 25\% of the training decisions never enter the growth. A split stays only if, there, it lowers the regret and raises the Sharpe ratio: a paired test on the checking rows, with a hurdle in standard errors (v1: 2 s.e., below the root only).
@@ -187,15 +268,15 @@ and the path's Sharpe ratio is $S=\mathrm{mean}(\pi)/\mathrm{std}(\pi)$ per deci
 \toprule
 Choice & v1 & Why (section of the experiments report) \\
 \midrule
-risk aversion $\lambda$ & 1 & positions 0/1; the tree is a regime classifier, sizing is not the object yet (8)\\
-fee & 3 bp on the asset, 0 on cash & market-sized; 10 bp starves the fast rates (8)\\
-decision rate & weekly ($h=5$); every 2 days as alternative & daily to weekly equivalent, monthly loses (4)\\
-depth & at most 3 & depth alone changes nothing; room for one interaction (8)\\
-leaf minimum & 20 decisions and 10\% of the node & tail leaves at 0.7\% of the data (7)\\
-candidate thresholds & deciles by rank + local refinement (1 s.e.) & same Sharpe as the full screen, steadier thresholds (9, 12)\\
-soft splits & \textbf{off} ($\kappa=0$) & never raise the Sharpe at $\lambda=1$ (9, 12)\\
+risk aversion $\lambda$ & 1 & positions 0/1; the tree is a regime classifier, sizing is not the object yet \\
+fee & 3 bp on the asset, 0 on cash & market-sized; 10 bp starves the fast rates \\
+decision rate & weekly ($h=5$); every 2 days as alternative & daily to weekly equivalent, monthly loses \\
+depth & at most 3 & depth alone changes nothing if not reached\\
+leaf minimum & 20 decisions and 10\% of the node & tail leaves at 0.7\% of the data \\
+candidate thresholds & deciles by rank + local refinement (1 s.e.) & same Sharpe as the full screen, steadier thresholds \\
+soft splits & \textbf{off} ($\kappa=0$) & never raise the Sharpe at $\lambda=1$ \\
 growth gates & regret reduction, then the replayed Sharpe must rise & kept as designed; to be revisited in v2\\
-pruning & last 25\% of the training decisions; hurdle 2 s.e. below the root, none at the root & the out-of-sample judge (7); the hurdle removes spurious leaves at no cost (12)\\
+pruning & last 25\% of the training decisions; hurdle 2 s.e. below the root, none at the root & the out-of-sample judge ; the hurdle removes spurious leaves at no cost \\
 covariance & 180-day window, $\Sigma_t=h\,\hat\sigma_t^2$ & a 20-day window is noisier than it is timely (regime report)\\
 conventions & cash column; all-cash Sharpe $=0$; $|\hat c|\le10\%$ & (7, model document)\\
 \bottomrule
@@ -211,8 +292,8 @@ conventions & cash column; all-cash Sharpe $=0$; $|\hat c|\le10\%$ & (7, model d
 \column{0.54\textwidth}
 \small One daily feature $x$ (Ornstein--Uhlenbeck) decides the regime of one asset:
 \begin{gather*}
-x_{t+1}=m+e^{-k}(x_t-m)+\eta_t,\quad \eta_t\sim\mathcal N\big(0,s^2(1-e^{-2k})\big),\\
-\log\tfrac{S_{t+1}}{S_t}=\mu_t-\tfrac12\sigma^2+\sigma\varepsilon_t,\quad \mu_t=\pm\mu\ \text{as}\ x_t\gtrless d,
+dx_t = k(m-x_t)dt + s\,dW_t\\
+\frac{ds_t}{s_t} = \mu_t dt + \sigma_t dW_t,\quad \mu_t=\pm\mu\ \text{as}\ x_t\gtrless d,
 \end{gather*}
 with $\mu=e\,\sigma$, $e$ the \emph{edge} (daily drift over volatility).
 
@@ -230,21 +311,29 @@ data & 15 years of training, 5 of test, daily\\
 
 \column{0.44\textwidth}
 \includegraphics[width=\textwidth]{planted_world_one_dataset}
-\footnotesize\textbf{What is measured}, over 40 to 100 datasets per cell: where the first threshold lands (target $d=0$, $x$ has standard deviation 1); the annualized test Sharpe ratio of the tree against the \emph{ideal rule} (the optimizer fed $\E[r\mid x]$, the best any method can do with $x$) and the \emph{rule at $d$}; the share of the ideal gain captured.
+\footnotesize\textbf{What is measured}, over 40 to 100 datasets per cell: where the first threshold lands (target $d=0$, $x$ has standard deviation 1); the annualized test Sharpe ratio of the tree against the \emph{ideal rule} (the optimizer fed $\E[r\mid x]$: the best any method can do with $x$) and the \emph{rule at $d$}; the share of the ideal gain captured.
 \end{columns}
 \end{frame}
 
 % ---------------------------------------------------------------------------------------------------
-\begin{frame}{One dataset, weekly decisions, edge 0.10}
+\begin{frame}{One fitted tree, read on its planted market (dataset 42, weekly, edge 0.10)}
 \begin{columns}[T]
-\column{0.6\textwidth}
+\column{0.54\textwidth}
 \includegraphics[width=\textwidth]{learned_vs_ideal_one_dataset}
-\column{0.38\textwidth}
-\small
+\column{0.45\textwidth}
+\scriptsize
+\textbf{What is drawn} ($x$ on the decision day, horizontally).
 \begin{itemize}
-\item The root split lands at $x=0.12$ for a planted $0$; the score jumps from about $-0.3\%$ to $+0.5\%$ a week, outside the optimizer's $0.1\%$ window, so the position is 0 below and 1 above, as the ideal rule's is.
-\item With the plain pruning (the base) a second split at $x=1.60$ survives in the tail and sends the tree to cash above it: a leaf of a few dozen decisions, confirmed by a handful of checking rows. This is the kind of leaf the v1 hurdle removes.
-\item The ideal rule is the ceiling: it knows $\E[r\mid x]$ exactly, and still trades a threshold, because at $\lambda=1$ the optimizer's answer is a threshold.
+\item \textcolor{navy}{\textbf{blue curve}} (top): the true expected 5-day return given $x$, from the planted model; zero at $x=-0.01$, the planted $d=0$.
+\item \textbf{grey dots}: realized 5-day returns of the training decisions, mean by bin of $x$ ($\pm1$ s.e.).
+\item \textcolor{figorange}{\textbf{orange steps}} (top): the frozen tree's score, one level per leaf: $-0.35\%$ for $x\le0.12$, $+0.55\%$ up to $1.60$, $-0.15\%$ above.
+\item \textbf{bottom}: the asset weight the optimizer chooses from a 50/50 portfolio when fed the blue curve (\textcolor{navy}{ideal rule}) or the tree's score (\textcolor{figorange}{tree}).
+\end{itemize}
+\textbf{Reading.}
+\begin{itemize}
+\item Root threshold $0.12$ for a planted $0$. The scores need not match the curve: both sit outside the $0.1\%$ window, so the position is 0 left of $0.12$ and 1 right of it, as the ideal rule's, up to $1.60$.
+\item Above $1.60$ the base pipeline kept a leaf with a negative score: cash where the ideal rule stays invested. A few dozen decisions confirmed by a handful of checking rows; the v1 hurdle removes such leaves.
+\item The ideal rule is a step too: at $\lambda=1$ the optimizer answers 0 or 1.
 \end{itemize}
 \end{columns}
 \end{frame}
@@ -252,13 +341,13 @@ data & 15 years of training, 5 of test, daily\\
 % ---------------------------------------------------------------------------------------------------
 \begin{frame}{Result 1: the threshold is recovered at market sizes (E2, base pipeline)}
 \begin{columns}[T]
-\column{0.6\textwidth}
-\scriptsize\setlength{\tabcolsep}{3.5pt}
+\column{0.5\textwidth}
+\scriptsize\setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{}rr r c rr r@{}}
 \toprule
-& & first split & first threshold & \multicolumn{2}{c}{annualized test Sharpe} & gain\\
+& & split & threshold & \multicolumn{2}{c}{annual.\ test Sharpe} & \\
 \cmidrule(lr){5-6}
-edge & $h$ & on $x$ (\%) & within 0.25 & tree & ideal & captured\\
+edge & $h$ & on $x$ (\%) & within 0.25 & tree & ideal & gain\\
 \midrule
 0.10 & 1 & 97 & 95\% & 0.80 & 1.03 & 76\%\\
  & 5 & 94 & 81\% & 0.73 & 0.88 & 79\%\\
@@ -272,17 +361,17 @@ edge & $h$ & on $x$ (\%) & within 0.25 & tree & ideal & captured\\
 \bottomrule
 \end{tabular}
 
-\smallskip
-100 datasets per row (50 at edge 0.02); s.e. of the tree--ideal difference 0.03 to 0.05. The rule at $d$ equals the ideal rule to 0.02; ``always the asset'' earns nothing.
-
-\smallskip\small
+\smallskip\scriptsize
+\textbf{How to read it.} One row = 100 datasets (50 at edge 0.02), each a fresh 15-year history with the threshold planted at $x=0$. \emph{$h$}: days between decisions. \emph{split on $x$}: share of the datasets whose tree keeps a split at all (with one feature, the alternative is no split). \emph{within 0.25}: share whose first threshold lies within 0.25 standard deviations of $x$ from the planted $0$. \emph{Sharpe}: annualized test Sharpe ratio, mean over the datasets (s.e.\ about 0.04); \emph{ideal} = the optimizer fed the true expected return given $x$. \emph{gain}: the tree's test return above the tree without splits, as a share of the ideal rule's.
+\column{0.48\textwidth}
+\footnotesize
+\textbf{What the table says.}
 \begin{itemize}
-\item $\pm25\%$ a year: found at every rate, 75--85\% of the attainable gain.
-\item $\pm13\%$: found less often and less precisely, 25--50\% of the gain.
-\item $\pm5\%$: nothing can be found in 15 years; the tree mostly keeps no split, which is right: the ideal rule itself earns almost nothing.
+\item \textbf{With a drift of $\pm25\%$ a year the threshold is found at every rate.} Almost every tree splits, most thresholds land within 0.25 of the planted 0, and the tree earns 75 to 79\% of the ideal rule's gain out of sample.
+\item \textbf{With $\pm13\%$ it degrades gracefully.} Fewer trees split, the threshold is less precise, and the tree captures 25 to 51\% of a gain that is itself small (ideal Sharpe 0.35 to 0.49).
+\item \textbf{With $\pm5\%$ there is nothing to find in 15 years.} Half of the trees keep no split, the other half split at random ; the tree's Sharpe is 0 and the ideal rule's nearly so (0.15). Finding nothing is the right answer.
+\item \textbf{Rate:} daily to weekly are equivalent; monthly loses precision and Sharpe, because a decision is held while the regime changes.
 \end{itemize}
-\column{0.38\textwidth}
-\includegraphics[width=\textwidth]{maps_rate_vs_edge}
 \end{columns}
 \end{frame}
 
@@ -311,12 +400,44 @@ edge & $h$ & on $x$ (\%) & within 0.25 & tree & ideal & captured\\
 \small
 Mean position of the asset by bin of $x$ on the test decisions, weekly, edge 0.10, against the ideal rule on the same information.
 \begin{itemize}
-\item \textbf{Depth 3 alone changes nothing}: same leaves, same Sharpe (0.80 weekly for both). The depth is a maximum, not a target.
-\item \textbf{$\lambda=5$ and 10 make the positions gradual}, and the tree learns them (its profile follows the ideal rule's), at a cost of 0.1 to 0.15 of Sharpe (0.70 and 0.65 against 0.80 weekly).
+\item \textbf{$\lambda=5$ and 10 make the positions gradual}, and the tree learns them, at a cost of 0.1 to 0.15 of Sharpe (0.70 and 0.65 against 0.80 weekly).
 \item \textbf{A 10 bp fee} keeps positions at 0/1 and starves the fast rates: 0.53 against 0.88 every 2 days, turnover halved.
 \item \textbf{Values' quartiles as the only candidates} lose at the fast rates (0.64 against 0.88 every 2 days).
 \end{itemize}
 Decision for v1: $\lambda=1$, 3 bp, depth at most 3. Sizing is a later question (at $\lambda=10$ the tree does size as the ideal rule does).
+\end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------------------
+\begin{frame}{Split-search options: quantile candidates, refinement, soft splits}
+\scriptsize
+At a leaf with rows $I$ ($N$ rows) a child must keep $m_\ast=\max(m,\lceil\varphi N\rceil)$ rows ($m=20$, $\varphi=10\%$ in v1). The \textbf{plain} candidates of a feature are the midpoints between consecutive distinct values, $\theta_{(1)}<\dots<\theta_{(K)}$, whose two sides both keep $m_\ast$ rows. Each candidate is \textbf{screened} cheaply, each child getting its clipped mean return as score:
+\[
+Q(\theta)=\sum_{t\in I}\Reg_t\big(c_{\mathrm{side}(t)}(\theta)\big),\qquad
+c_{\mathrm{left}}(\theta)=\mathrm{clip}\Big(\mathrm{mean}\{r_t:\ x_t\le\theta\},\ \pm b\Big),\ \text{likewise on the right.}
+\]
+\begin{columns}[T]
+\column{0.5\textwidth}
+\textbf{Quantile candidates + refinement} (on in v1)
+\begin{itemize}
+\item \emph{Deciles by rank.} Instead of all $K$ candidates, keep the nine at ranks $\mathrm{round}(q\,(K-1))$, $q=0.1,\dots,0.9$: evenly spread over the admissible range, never on its edge. The full screen costs $K\approx N-2m_\ast$ solves, this costs 9.
+\item \emph{Refinement.} Let $\theta_\circ$ be the best decile. Screen every plain candidate strictly between its two neighbouring deciles; let $\theta_\bullet$ be the best of them. It replaces $\theta_\circ$ only if the improvement is clear,
+\[
+Q(\theta_\circ)-Q(\theta_\bullet)>k\cdot\mathrm{se},\qquad \mathrm{se}=\sqrt{|I|}\;\mathrm{std}_t(\delta_t),
+\]
+$\delta_t$ the per-row difference of the two regrets, $k=1$ in v1. The 3 best survivors get the full fit of their children.
+\end{itemize}
+\column{0.48\textwidth}
+\textbf{Soft split} (off in v1: $\kappa=0$)
+\begin{itemize}
+\item Keep \emph{all} candidates $\theta_1<\dots<\theta_K$ of the feature, with Boltzmann weights from their screened regrets:
+\[
+z_k=\frac{Q(\theta_k)-\min_lQ(\theta_l)}{\mathrm{se}_k},\qquad
+\pi_k=\frac{e^{-z_k/\kappa}}{\sum_le^{-z_l/\kappa}}
+\]
+(Gaussian variant $e^{-z^2/2\kappa^2}$): thresholds the data cannot tell from the best share the weight, clearly worse ones get none.
+\item A row with value $x$ goes left with weight $\mu(x)=\sum_{k:\,\theta_k\ge x}\pi_k$, right with $1-\mu(x)$; weights multiply down the tree ($\omega_{t\ell}$), the leaf fit minimises $\sum_t\omega_{t\ell}\Reg_t(c)$, and a row's score is the mixture $\hat c(x_t)=\sum_\ell\omega_{t\ell}\hat c_\ell$: a ramp in $x$ instead of a jump. As $\kappa\to0$ the plain split is recovered.
+\end{itemize}
 \end{columns}
 \end{frame}
 

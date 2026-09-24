@@ -18,6 +18,7 @@ report/
   experiments_planted_threshold.tex  the experiments on the first market (constant volatility), one section per sweep
   experiments_regime_volatility.tex  the experiments on the second market (volatility follows a threshold too)
   presentation_model_v1.tex          beamer deck: model v1 (24 September 2026), its training and the evidence behind it
+  presentation_model_v1_short.tex    the 15-minute version of the deck: model with equations, then the results
   model_history.md                   dated history of the pipeline versions, the markets and the experiments
   motivations.md                     the motivations of the project
   figures/                           figures and results files (results_*.json) written by the experiments
@@ -32,5 +33,5 @@ cd code
 ../.venv/bin/python planted_threshold_experiments.py run    # the daily-data sweep (about 100 minutes)
 ../.venv/bin/python planted_threshold_experiments.py run-v1 # model v1 on 100 datasets (about 25 minutes)
 ../.venv/bin/python planted_threshold_experiments.py plot   # every figure and summary table, from the saved results
-cd ../report && latexmk -pdf model_and_training_pipeline.tex experiments_planted_threshold.tex experiments_regime_volatility.tex presentation_model_v1.tex
+cd ../report && latexmk -pdf model_and_training_pipeline.tex experiments_planted_threshold.tex experiments_regime_volatility.tex presentation_model_v1.tex presentation_model_v1_short.tex
 ```
