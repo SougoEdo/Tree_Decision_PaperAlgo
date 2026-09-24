@@ -96,8 +96,12 @@ class TreeConfig:
     refine_standard_errors: float = 0.0  # hard splits: a refined threshold must beat the quantile one by this many s.e.
     smoothing: float = 0.0  # > 0: soft splits with Boltzmann weights exp(-z / smoothing) over the candidate thresholds
     prune_standard_errors: float = 0.0  # pruning keeps a split only if its checking-row regret gain exceeds this many s.e.
-    smoothing_kernel: str = "laplace"  # weights exp(-z / k) ("laplace") or exp(-z^2 / 2k^2) ("gaussian")
-    prune_hurdle_from_depth: int = 0  # the pruning hurdle applies to splits at this depth or below (0 = all)
+    smoothing_kernel: str = (
+        "laplace"  # weights exp(-z / k) ("laplace") or exp(-z^2 / 2k^2) ("gaussian")
+    )
+    prune_hurdle_from_depth: int = (
+        0  # the pruning hurdle applies to splits at this depth or below (0 = all)
+    )
     min_regret_improvement: float = 1e-6  # average gain per observation at node
     shortlist_size: int = 3  # screened splits per leaf that get a full fit and replay
     min_sharpe_improvement: float = 0.0  # a split must raise the path Sharpe by more
@@ -575,8 +579,13 @@ class SPOPortfolioTree:
             )
         if config.refine_thresholds and config.threshold_quantiles is None:
             raise ValueError("refine_thresholds needs threshold_quantiles.")
-        if config.smoothing_kernel not in ("laplace", "gaussian") or config.prune_hurdle_from_depth < 0:
-            raise ValueError("smoothing_kernel must be 'laplace' or 'gaussian'; prune_hurdle_from_depth >= 0.")
+        if (
+            config.smoothing_kernel not in ("laplace", "gaussian")
+            or config.prune_hurdle_from_depth < 0
+        ):
+            raise ValueError(
+                "smoothing_kernel must be 'laplace' or 'gaussian'; prune_hurdle_from_depth >= 0."
+            )
 
     def fit(self, X, R, Sigma, initial_weights=None):
         """Grow the tree on chronological rows while it trades its own holdings.
@@ -768,11 +777,17 @@ class SPOPortfolioTree:
             # standard error (rows treated as independent).
             gain = without.regret - with_split.regret
             improvement = float(gain.mean())
-            error = float(gain.std(ddof=1) / np.sqrt(len(gain))) if len(gain) > 1 else 0.0
+            error = (
+                float(gain.std(ddof=1) / np.sqrt(len(gain))) if len(gain) > 1 else 0.0
+            )
             kept = bool(
                 improvement > c.min_regret_improvement
-                and improvement > (c.prune_standard_errors * error
-                                   if depth >= c.prune_hurdle_from_depth else 0.0)
+                and improvement
+                > (
+                    c.prune_standard_errors * error
+                    if depth >= c.prune_hurdle_from_depth
+                    else 0.0
+                )
                 and with_split.sharpe > without.sharpe + c.min_sharpe_improvement
             )
             if kept:
@@ -1037,7 +1052,11 @@ class SPOPortfolioTree:
                         else (0.0 if excess <= 0 else np.inf)
                     )
                 scaled = z / c.smoothing
-                pis = np.exp(-0.5 * scaled**2) if c.smoothing_kernel == "gaussian" else np.exp(-scaled)
+                pis = (
+                    np.exp(-0.5 * scaled**2)
+                    if c.smoothing_kernel == "gaussian"
+                    else np.exp(-scaled)
+                )
                 pis /= pis.sum()
                 order = np.argsort(candidates)
                 screened.append(
@@ -1182,7 +1201,9 @@ class SPOPortfolioTree:
         if use_quantiles and quantiles is not None and len(thresholds):
             # Quantiles by rank among the admissible thresholds: evenly spread
             # over what the leaf minimum allows, never on its boundary.
-            ranks = np.round(np.asarray(quantiles, dtype=float) * (len(thresholds) - 1)).astype(int)
+            ranks = np.round(
+                np.asarray(quantiles, dtype=float) * (len(thresholds) - 1)
+            ).astype(int)
             thresholds = thresholds[np.unique(ranks)]
         return self._thin(thresholds) if limit else thresholds
 

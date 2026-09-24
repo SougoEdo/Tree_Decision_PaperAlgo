@@ -56,7 +56,9 @@ class Case:
     test_days: int = 5 * DAYS_PER_YEAR  # days kept for the test
     ridge: float = 1e-6
     feature_noise: float = 0.0  # std of the observation noise on x (x has std 1); the price follows the true x
-    up_volatility_ratio: float = 1.0  # price volatility at or above the volatility threshold, relative to below
+    up_volatility_ratio: float = (
+        1.0  # price volatility at or above the volatility threshold, relative to below
+    )
     volatility_threshold: float | None = None  # None: the drift threshold d
     # the decision problem and the tree (defaults: the run of the note)
     risk_aversion: float = 1.0  # lambda of the optimizer
@@ -75,9 +77,13 @@ class Case:
     smoothing: float = (
         0.0  # > 0: soft splits (Boltzmann weights over the candidate thresholds)
     )
-    prune_standard_errors: float = 0.0  # pruning: the checking-row gain must exceed this many s.e.
+    prune_standard_errors: float = (
+        0.0  # pruning: the checking-row gain must exceed this many s.e.
+    )
     smoothing_kernel: str = "laplace"  # or "gaussian"
-    prune_hurdle_from_depth: int = 0  # the hurdle applies to splits at this depth or below
+    prune_hurdle_from_depth: int = (
+        0  # the hurdle applies to splits at this depth or below
+    )
 
     @property
     def mu(self):
@@ -105,11 +111,15 @@ class Case:
     @property
     def d_sigma(self):
         """The threshold of the volatility regime."""
-        return self.d if self.volatility_threshold is None else self.volatility_threshold
+        return (
+            self.d if self.volatility_threshold is None else self.volatility_threshold
+        )
 
     def volatility_of(self, x):
         """Price volatility per day when the feature is at x (an array works)."""
-        return self.volatility * np.where(np.asarray(x) < self.d_sigma, 1.0, self.up_volatility_ratio)
+        return self.volatility * np.where(
+            np.asarray(x) < self.d_sigma, 1.0, self.up_volatility_ratio
+        )
 
 
 @dataclass(frozen=True)
@@ -120,7 +130,9 @@ class Rows:
     X: np.ndarray  # (T, 1) the observed x on the decision day
     R: np.ndarray  # (T, 2) simple return from this decision to the next
     Sigma: np.ndarray  # (T, 2, 2) covariance of that return, from past days only
-    Sigma_true: np.ndarray  # (T, 2, 2) covariance from the regime's true volatility on the decision day
+    Sigma_true: (
+        np.ndarray
+    )  # (T, 2, 2) covariance from the regime's true volatility on the decision day
 
 
 def simulate(case, seed):
@@ -133,10 +145,20 @@ def simulate(case, seed):
     rng = np.random.default_rng(seed)
     n_days = case.window + case.step * (case.n_train + case.n_test)
     x = ou_process(case.mean, case.feature_variance, case.k, n_steps=n_days, rng=rng)
-    prices = signal_process(x, case.mu, case.d, case.price_variance, rng=rng,
-                            up_volatility_ratio=case.up_volatility_ratio,
-                            volatility_threshold=case.volatility_threshold)
-    observed = x + case.feature_noise * rng.normal(size=len(x)) if case.feature_noise > 0 else x
+    prices = signal_process(
+        x,
+        case.mu,
+        case.d,
+        case.price_variance,
+        rng=rng,
+        up_volatility_ratio=case.up_volatility_ratio,
+        volatility_threshold=case.volatility_threshold,
+    )
+    observed = (
+        x + case.feature_noise * rng.normal(size=len(x))
+        if case.feature_noise > 0
+        else x
+    )
     return x, observed, prices
 
 
@@ -179,8 +201,10 @@ def expected_return_curve(case, grid, n_paths=20000, seed=0):
         # The grid is the observed value; the true x is drawn from its posterior
         # (both Gaussian: shrink towards the mean, then add the posterior noise).
         shrink = case.feature_variance / (case.feature_variance + case.feature_noise**2)
-        x = case.mean + shrink * (x - case.mean) + rng.normal(
-            0, np.sqrt(shrink * case.feature_noise**2), x.shape
+        x = (
+            case.mean
+            + shrink * (x - case.mean)
+            + rng.normal(0, np.sqrt(shrink * case.feature_noise**2), x.shape)
         )
     balance = np.where(x >= case.d, 1.0, -1.0)
     for _ in range(case.step - 1):

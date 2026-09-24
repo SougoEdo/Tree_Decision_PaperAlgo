@@ -27,13 +27,13 @@
 
 \title{\vspace{-1.2cm}The SPO tree: model architecture and training pipeline\\[2pt]\large What the code does, step by step, with the equations}
 \author{}
-\date{23 September 2026}
+\date{23--24 September 2026}
 
 \begin{document}
 \maketitle
 \vspace{-0.6cm}
 
-\keybox{This document describes the training of \code{SPOPortfolioTree} (\code{spo_tree.py}) as it is today, in the order the code runs it: the inputs, the decision problem the tree feeds, the loss, the replay, how a leaf score is fitted, how candidate thresholds are chosen (plain, quantile, refined, soft), how a split is accepted, how the tree is pruned and refitted, and how it is used. Every option added since the first version of the code is off by default, so with the defaults the training is the original one, plus one convention (Section~\ref{sec:changes}). The experiments that test it are in \code{experiments_planted_threshold.tex}.}
+\keybox{This document describes the training of \code{SPOPortfolioTree} (\code{spo_tree.py}) as it is today, in the order the code runs it: the inputs, the decision problem the tree feeds, the loss, the replay, how a leaf score is fitted, how candidate thresholds are chosen (plain, quantile, refined, soft), how a split is accepted, how the tree is pruned and refitted, and how it is used. Every option added since the first version of the code is off by default, so with the defaults the training is the original one, plus one convention (Section~\ref{sec:changes}). The experiments that test it are in \code{experiments_planted_threshold.tex}; the configuration frozen as model v1 on 24 September is in Section~\ref{sec:v1}.}
 
 \begin{figure}[H]
 \centering
@@ -206,6 +206,30 @@ Parameter & default & \code{run_real_data.py} & note & role\\
 \bottomrule
 \end{tabularx}
 \caption{The parameters: class defaults, the values of \code{run_real_data.py} (real data), and those of the experiments report (\code{planted_threshold_test.py}, base case). Section~8 of that report varies $\lambda$, $f$, $D$ and the quantiles, Section~9 the split-search options, Section~10 the pruning hurdle.}
+\end{table}
+
+\section{Configuration v1 (24 September 2026)}\label{sec:v1}
+The first frozen configuration of the tree. It was chosen after the experiments E2--E8 of the experiments report (Sections~4 and 8--12 of \code{experiments_planted_threshold.tex}) and validated as a whole on 100 datasets (E9, Section~13 there). It is pipeline P4 with the values below; every other parameter keeps its class default. In code it is the setting \code{V1} of \code{planted_threshold_experiments.py} (command \code{run-v1}), and it is the model presented in \code{presentation_model_v1.tex}.
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{3.6cm} >{\raggedright\arraybackslash}p{4.2cm} L@{}}
+\toprule
+Choice & v1 & Why (section of the experiments report)\\
+\midrule
+risk aversion $\lambda$ & 1 & positions are 0 or 1 at this stage: the tree is a regime classifier, and sizing is a later question; $\lambda=5$--$10$ gives gradual positions at a cost of about 0.1 of Sharpe (8)\\
+fee $f$ & 3 bp on the asset, 0 on cash & market-sized; 10 bp starves the fast rates (8)\\
+decision rate $h$ & weekly; every 2 days as the alternative & daily to weekly are equivalent, monthly loses precision and profit (4)\\
+depth $D$ & at most 3 & the depth alone changes nothing (8); room for one interaction\\
+leaf minimum $m$, $\varphi$ & 20 decisions and 10\% of the node & 20 decisions is 0.7\% of the daily rows and lets tail leaves through (7)\\
+candidate thresholds & deciles by rank among the admissible thresholds, then local refinement with a 1 s.e.\ hurdle & the same Sharpe as the full screen with steadier thresholds at the slow rates, ten times fewer candidates (9, 12)\\
+soft splits $\kappa$ & off & smoothing never raises the Sharpe at $\lambda=1$: $\kappa=1$ puts the score in the no-trade band, $\kappa=0.25$ matches the base from weekly on but loses 0.26 every 2 days (9, 12); kept as an option for $\lambda\ge5$\\
+growth gates & regret reduction, then the replayed Sharpe must rise ($\varepsilon_R=10^{-6}$, $\varepsilon_S=0$) & kept as designed; the in-sample Sharpe gate is the first thing v2 revisits\\
+pruning & last 25\% of the training decisions; hurdle $k_p=2$ s.e.\ for splits below the root ($D_p=1$), plain rule at the root & a global hurdle loses true root splits (10); below the root it removes the second-level leaves at no cost from weekly on (12)\\
+covariance & 180 daily returns, $\Sigma_t=\mathrm{diag}(h\hat\sigma_t^2,\varepsilon)$ & a 20-day window follows a volatility regime but its noise costs more (regime report)\\
+conventions & cash column with score 0; all-cash Sharpe ratio $=0$; $|\hat c_\ell|\le10\%$; shortlist 3 & Sections~\ref{sec:path} and \ref{sec:leaf}\\
+\bottomrule
+\end{tabularx}
+\caption{Model v1. In code: \code{max_depth=3}, \code{min_samples_leaf=20}, \code{min_leaf_fraction=0.10}, \code{threshold_quantiles=(0.1,...,0.9)}, \code{refine_thresholds=True}, \code{refine_standard_errors=1}, \code{prune_standard_errors=2}, \code{prune_hurdle_from_depth=1}, \code{validation_fraction=0.25}, \code{fee_rate=(0.0003,0)}, \code{risk_aversion=1}.}
 \end{table}
 
 \section{What changed since the first version of the code}\label{sec:changes}

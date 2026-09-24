@@ -25,7 +25,7 @@
 
 \title{\vspace{-1.2cm}The SPO tree on planted regimes: experiments and results\\[2pt]\large Daily data with market-sized parameters; risk aversion, fees and depth; split-search options; pruning hurdle}
 \author{}
-\date{22--23 September 2026}
+\date{22--24 September 2026}
 
 \begin{document}
 \maketitle
@@ -40,7 +40,7 @@
 \item Daily to weekly decisions are equivalent. Monthly decisions lose precision and profit, all the more when the feature is fast (half-life of a week): the regime then changes inside the holding period.
 \item A defect was found and fixed on the way: a tree that stayed in cash had an undefined Sharpe ratio, which made pruning reject every split whose alternative was cash (Section~\ref{sec:code}).
 \item \emph{Limit:} one clean feature. The earlier experiment (Section~\ref{sec:first}) showed decoys are ignored at a huge drift; whether they stay ignored at these drifts is the next test.
-\item \emph{Three more experiments} follow, one section each: risk aversion, fees and depth (Section~\ref{sec:settings}); quantile candidates, refinement and soft splits (Section~\ref{sec:enhancements}); a calibrated pruning hurdle (Section~\ref{sec:pruning}). Each opens with its own one-paragraph summary.
+\item \emph{Three more experiments} follow, one section each: risk aversion, fees and depth (Section~\ref{sec:settings}); quantile candidates, refinement and soft splits (Section~\ref{sec:enhancements}); a calibrated pruning hurdle (Section~\ref{sec:pruning}). Each opens with its own one-paragraph summary. Added later: the resolution of the threshold against noise (Section~\ref{sec:resolution}), sharper smoothing weights and the hurdle below the root (Section~\ref{sec:options2}), and the validation of model v1 on 100 datasets (Section~\ref{sec:v1}).
 \end{itemize}}
 
 \section{The model under test}\label{sec:model}
@@ -677,18 +677,92 @@ deciles + refinement + hurdle below the root & 2 & 95 & 5 & 87\% & -- & 2 & 0.79
 \item \textbf{None of the options raises the Sharpe ratio above the base} beyond the noise of 40 datasets (standard error about 0.04). What they buy is steadier and better-centred thresholds at the slow rates and trees without spurious leaves. As defaults: the hurdle below the root from weekly decisions on, deciles with refinement for slow rates, and no smoothing unless positions are meant to be interior ($\lambda\ge5$).
 \end{itemize}
 
+\section{Model v1 on 100 datasets: the frozen configuration against the base}\label{sec:v1}
+\textbf{Pipeline used.} P4 of \code{model_history.md} in the configuration frozen as \emph{model v1} on 24 September (section ``Configuration v1'' of \code{model_and_training_pipeline.tex}): depth at most 3, deciles by rank among the admissible thresholds with a 10\% leaf fraction, local refinement with a 1~s.e.\ hurdle, pruning hurdle of 2~s.e.\ below the root; every other parameter as in the base (plain pruning at the root, $\lambda=1$, fee 3~bp, 20 decisions per leaf, 180-day covariance); market M2. The base records are those of Section~\ref{sec:results} (P2, which is P4 with every option off) on the same datasets, seeds 0 to 99, so every comparison is paired.
+
+\keybox{\textbf{In short.} Model v1 is the combination that Section~\ref{sec:options2} suggested (deciles with refinement and the hurdle below the root), with the depth raised to 3. Run as a whole on 100 datasets against the base of Section~\ref{sec:results} on the same datasets, it is \emph{the base within noise from weekly decisions on}: the paired differences of annualized test Sharpe are $0.00\pm0.04$, $+0.01\pm0.05$ and $-0.01\pm0.03$ at edge 0.10 (weekly, every 2 weeks, monthly) and $-0.03\pm0.05$, $+0.03\pm0.04$, $-0.03\pm0.03$ at edge 0.05, with the second-level leaves gone (18, 14 and 9\% of the datasets to 0, 2 and 0\% at edge 0.10) and trees of 1.9 leaves instead of 2.1. At every 2 days it costs $0.08\pm0.07$ at edge 0.10, as Section~\ref{sec:options2} had found on 40 datasets: some second-level splits are real there and the hurdle removes them. The depth budget of 3 is never used in this one-threshold market (at most 1\% of the trees reach the third level), so that choice is untested here. v1 is the base with a cleaner structure, not a higher Sharpe ratio.}
+
+\textbf{Protocol.} The setting \code{V1} of \code{planted_threshold_experiments.py} (\code{run-v1}) fits model v1 on the datasets of seeds 0 to 99 at edges 0.05 and 0.10 and at the four trading rates of the option experiments, 800 fits; \code{plot} reads the base records of the same seeds, edges and rates from \code{results_daily_threshold.json} (800 of the 2{,}000 fits of Section~\ref{sec:results}) and compares them cell by cell and dataset by dataset. The paired difference is the annualized test Sharpe ratio of v1 minus that of the base on the same dataset; its standard error is that of the 100 differences. Because both trees are grown on the same rows, they often keep exactly the same root split (in 42 to 59\% of the datasets) and then give the same Sharpe ratio; the table counts these ties.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\linewidth]{model_v1_thresholds}
+\caption{Where the first threshold lands, weekly decisions, 100 datasets per panel: the base (top) and model v1 (bottom), at edge 0.05 (left) and 0.10 (right).}
+\label{fig:v1-thresholds}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[height=0.46\textheight]{model_v1_splits}
+\caption{What the trees keep, by rate: first split on $x$, no split kept, and a second-level split kept, base against v1, at both edges.}
+\label{fig:v1-splits}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\linewidth]{model_v1_maps}
+\caption{Model v1 against the base at edge 0.10: gain captured, Sharpe ratio, leaves kept and turnover, by trading rate.}
+\label{fig:v1-maps}
+\end{figure}
+
+\begin{table}[H]
+\centering\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l r r r l r r r r r r r@{}}
+\toprule
+& & & split & first threshold & & 2nd & \multicolumn{2}{c}{annual.\ Sharpe} & gain & v1 $-$ base & better /\\
+\cmidrule(lr){8-9}
+setting & $h$ & leaves & on $x$ & median [quartiles] & $|\cdot|\le0.25$ & level & tree & ideal & captured & (2 s.e.) & same / worse\\
+\midrule
+\multicolumn{12}{@{}l}{\emph{edge 0.10}}\\
+base & 2 & 2.24 & 99 & $+0.03\ [-0.03,+0.11]$ & 92\% & 25 & 0.86 & 0.97 & 85\% & -- & --\\
+ & 5 & 2.14 & 94 & $+0.07\ [-0.04,+0.15]$ & 81\% & 18 & 0.73 & 0.88 & 79\% & -- & --\\
+ & 10 & 2.03 & 89 & $+0.07\ [-0.10,+0.21]$ & 70\% & 14 & 0.63 & 0.78 & 78\% & -- & --\\
+ & 21 & 1.90 & 81 & $+0.06\ [-0.07,+0.25]$ & 60\% & 9 & 0.54 & 0.68 & 75\% & -- & --\\
+model v1 & 2 & 2.00 & 98 & $+0.03\ [-0.04,+0.12]$ & 89\% & 2 & 0.78 & 0.97 & 77\% & $-0.08$ (0.07) & 20 / 52 / 28\\
+ & 5 & 1.94 & 94 & $+0.05\ [-0.05,+0.13]$ & 82\% & 0 & 0.73 & 0.88 & 81\% & $+0.00$ (0.04) & 28 / 52 / 20\\
+ & 10 & 1.92 & 90 & $+0.04\ [-0.15,+0.17]$ & 72\% & 2 & 0.64 & 0.78 & 81\% & $+0.01$ (0.05) & 20 / 48 / 32\\
+ & 21 & 1.81 & 81 & $+0.03\ [-0.13,+0.22]$ & 64\% & 0 & 0.53 & 0.68 & 75\% & $-0.01$ (0.03) & 16 / 58 / 26\\
+\addlinespace
+\multicolumn{12}{@{}l}{\emph{edge 0.05}}\\
+base & 2 & 2.18 & 75 & $+0.04\ [-0.12,+0.22]$ & 64\% & 38 & 0.21 & 0.46 & 44\% & -- & --\\
+ & 5 & 2.01 & 78 & $+0.10\ [-0.07,+0.33]$ & 53\% & 21 & 0.24 & 0.43 & 51\% & -- & --\\
+ & 10 & 1.93 & 73 & $+0.05\ [-0.20,+0.36]$ & 47\% & 19 & 0.17 & 0.39 & 43\% & -- & --\\
+ & 21 & 1.76 & 62 & $+0.25\ [-0.06,+0.60]$ & 34\% & 13 & 0.17 & 0.35 & 43\% & -- & --\\
+model v1 & 2 & 1.72 & 67 & $+0.05\ [-0.14,+0.24]$ & 57\% & 4 & 0.18 & 0.46 & 39\% & $-0.03$ (0.06) & 36 / 36 / 28\\
+ & 5 & 1.80 & 76 & $+0.12\ [-0.13,+0.40]$ & 51\% & 3 & 0.22 & 0.43 & 49\% & $-0.03$ (0.05) & 35 / 42 / 23\\
+ & 10 & 1.69 & 68 & $+0.11\ [-0.12,+0.38]$ & 49\% & 1 & 0.20 & 0.39 & 48\% & $+0.03$ (0.04) & 31 / 47 / 22\\
+ & 21 & 1.59 & 59 & $+0.19\ [-0.10,+0.42]$ & 42\% & 0 & 0.14 & 0.35 & 42\% & $-0.03$ (0.03) & 17 / 57 / 26\\
+\bottomrule
+\end{tabular}
+\caption{Model v1 against the base on the same 100 datasets ($h$: days between decisions). ``Leaves'': mean number of leaves kept; ``2nd level'': share of datasets that keep a second-level split; ``v1 $-$ base'': mean paired difference of the annualized test Sharpe ratio, with twice its standard error; ``better / same / worse'': share of datasets where v1's Sharpe ratio is above, equal to, or below the base's. With one feature, the datasets that do not split on $x$ keep no split.}
+\label{tab:v1}
+\end{table}
+
+\textbf{Reading the figures and the table.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{From weekly decisions on, v1 is the base.} The paired differences are within twice their standard error at every rate and both edges (largest: $\pm0.03$), and in half of the datasets the two trees give exactly the same Sharpe ratio. The gain captured is the same to a few points (79 to 81\% weekly, 78 to 81\% every 2 weeks, 75\% monthly at edge 0.10).
+\item \textbf{The second-level leaves are gone and the thresholds are as well centred.} At edge 0.10 the share of datasets with a second-level split falls from 25, 18, 14 and 9\% to 2, 0, 2 and 0\%; the root split is found as often (98, 94, 90, 81\% against 99, 94, 89, 81) and within 0.25 of $d$ as often or more (89, 82, 72, 64\% against 92, 81, 70, 60); the trees keep 1.9 leaves instead of 2.1. At edge 0.05 the same holds for the second level (38, 21, 19, 13\% to 4, 3, 1, 0\%), and the root is found a little less often (67, 76, 68, 59\% against 75, 78, 73, 62): with a weak signal the decile candidates sometimes miss the split the full screen finds, as Section~\ref{sec:enhancements} had noted.
+\item \textbf{Every 2 days, v1 costs $0.08\pm0.07$ at edge 0.10} (v1 better in 20\% of the datasets, worse in 28\%) and the gain captured falls from 85 to 77\%. With 1{,}400 fitting decisions a quarter of the base trees keep a real second-level refinement and the hurdle removes it with the noise, as in Section~\ref{sec:options2}. At edge 0.05 the 2-day difference is $-0.03\pm0.06$. For the 2-day alternative of v1 the hurdle should be softer (1~s.e.\ below the root) or off; this was not run.
+\item \textbf{The depth budget is not used.} v1 grows trees of 3 to 4 leaves and prunes them to 1.6 to 2.0; a split at the third level survives in at most 1\% of the datasets. In a market with one threshold the maximum depth of 3 changes nothing, as Section~\ref{sec:settings} had found for the base; whether it helps with two features and an interaction is the next experiment's question.
+\item \textbf{At edge 0.05 and monthly decisions the difference is $-0.03\pm0.03$}, at the edge of noise: with 180 training decisions the hurdle has removed second-level splits from 13\% of the trees and the deciles have cost three root splits; the base itself finds the threshold in only 62\% of these datasets.
+\end{itemize}
+
+\textbf{What this says.} The 100-dataset paired test confirms what the 40-dataset experiments suggested: v1 is not a higher Sharpe ratio, it is the same Sharpe ratio with smaller trees, thresholds as well centred, ten times fewer candidates screened, and no spurious leaf, from weekly decisions on. Its known cost is at every 2 days. The parts of v1 that this market cannot test are the depth budget and the behaviour with several features; the part it does not question is the growth gate on the replayed Sharpe ratio, kept as designed.
+
 \section{How to reproduce}
 The code is in \code{code/} (run the commands below from that folder, with the project's Python, \code{../.venv/bin/python}); results and figures are in \code{report/figures/}. The results were produced with \code{synthetic_market.py} as committed in \code{eae145c} (one volatility for both regimes).
 \begin{itemize}\raggedright\setlength{\itemsep}{1pt}
 \item \code{python planted_threshold_test.py}: one dataset, printed in detail (about 10 s).
 \item \code{python planted_threshold_experiments.py} \code{run}: the 2{,}000 fits in parallel, 103 minutes on 10 cores; writes \code{results_daily_threshold.json}.
 \item \code{python planted_threshold_experiments.py} \code{plot}: the figures and the summary table of Tables~\ref{tab:edge}--\ref{tab:k}.
-\item \code{python -m unittest discover -s tests}: 59 tests, including the alignment and no-look-ahead checks of the rows and the Sharpe-of-cash convention.
+\item \code{python -m unittest discover -s tests}: 64 tests, including the alignment and no-look-ahead checks of the rows, the Sharpe-of-cash convention and the split-search and pruning options.
 \item \code{python planted_threshold_experiments.py} \code{run-settings}: the settings experiment of Section~\ref{sec:settings}, 1{,}920 fits, 54 minutes; writes \code{results_risk_fee_depth.json}, which \code{plot} then turns into Figures~\ref{fig:positions}--\ref{fig:settings-maps} and Table~\ref{tab:settings}.
 \item \code{python planted_threshold_experiments.py} \code{run-enhancements}: the split-search options of Section~\ref{sec:enhancements}, 1{,}600 fits, 35 minutes; writes \code{results_split_options.json}, drawn by \code{plot} as Figures~\ref{fig:scores}--\ref{fig:enh-maps} and Table~\ref{tab:enhancements}.
 \item \code{python planted_threshold_experiments.py} \code{run-pruning}: the pruning hurdle of Section~\ref{sec:pruning}, 1{,}600 fits, 30 minutes; writes \code{results_pruning_hurdle.json}, drawn by \code{plot} as Figures~\ref{fig:pruning-splits}--\ref{fig:pruning-thresholds} and Table~\ref{tab:pruning}.
 \item \code{python planted_threshold_experiments.py} \code{run-resolution}: the resolution sweeps of Section~\ref{sec:resolution}, 1{,}920 fits; writes \code{results_resolution.json}, drawn by \code{plot} as Figure~\ref{fig:resolution}.
 \item \code{python planted_threshold_experiments.py} \code{run-options}: the sharper smoothing weights and the hurdle below the root of Section~\ref{sec:options2}, 2{,}240 fits; writes \code{results_split_options_2.json}, drawn by \code{plot} as Figures~\ref{fig:options2-scores}--\ref{fig:options2-thresholds}.
+\item \code{python planted_threshold_experiments.py} \code{run-v1}: model v1 on 100 datasets (Section~\ref{sec:v1}), 800 fits; writes \code{results_model_v1.json}, which \code{plot} compares with the base records of \code{results_daily_threshold.json} (Figures~\ref{fig:v1-thresholds}--\ref{fig:v1-maps} and Table~\ref{tab:v1}).
 \item \code{report/model_and_training_pipeline.tex}: the model and its training, step by step, with the equations of every option.
 \end{itemize}
 \end{document}

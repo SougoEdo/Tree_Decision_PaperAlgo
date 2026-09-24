@@ -74,7 +74,15 @@ def moving_average(x, window):
 
 
 def signal_process(
-    x, mu, d, variance, *, s0=100.0, dt=1.0, rng=None, up_volatility_ratio=1.0,
+    x,
+    mu,
+    d,
+    variance,
+    *,
+    s0=100.0,
+    dt=1.0,
+    rng=None,
+    up_volatility_ratio=1.0,
     volatility_threshold=None,
 ):
     """Simulate dS = drift(X)*S*dt + sqrt(variance)*S*dB, starting at s0.
