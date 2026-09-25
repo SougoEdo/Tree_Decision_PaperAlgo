@@ -38,7 +38,7 @@
 \SetKwProg{Fn}{function}{:}{end}
 \SetKwFunction{Replay}{REPLAY}\SetKwFunction{Measure}{MEASURE}\SetKwFunction{Reg}{REG}\SetKwFunction{FitLeaf}{FIT\_LEAF}
 \SetKwFunction{Grow}{GROW}\SetKwFunction{BestSplit}{BEST\_SPLIT}\SetKwFunction{Shortlist}{SHORTLIST}\SetKwFunction{Screen}{SCREEN}
-\SetKwFunction{RefitAll}{REFIT\_ALL}\SetKwFunction{Prune}{PRUNE}\SetKwFunction{CheckPath}{CHECK\_PATH}\SetKwFunction{Visit}{VISIT}
+\SetKwFunction{RefitAll}{RESCORE}\SetKwFunction{Prune}{PRUNE}\SetKwFunction{CheckPath}{CHECK\_PATH}\SetKwFunction{Visit}{VISIT}
 \SetKwFunction{Scores}{SCORES}\SetKwFunction{Main}{MAIN}\SetKwFunction{Route}{ROUTE}
 \SetKw{KwBreak}{break}\SetKw{KwSkip}{skip}\SetKw{KwAnd}{and}\SetKw{KwOr}{or}\SetKw{KwNone}{none}
 
@@ -62,7 +62,8 @@ utility(w; r, u, \(\Sigma\)) & $r^\top w-f^\top|w-u|-\lambda w^\top\Sigma w$\\
 \(\U[t]\), \(\B[t]\) & training state, one row per date: holdings before decision $t$; hindsight utility from those holdings. Set by \Measure, frozen between two calls\\
 leaf \(\ell\) = (node, rows, \(\omega\), depth) & node: score $\hat c_\ell\in[-b,b]^n$, mass $n_\ell$, regret sum $L_\ell$ ; rows: the dates reaching $\ell$; $\omega$: their weights\\
 split node & feature $j$, threshold $\theta$, two children ; a soft node also holds thresholds $\theta_1<\dots<\theta_K$ and weights $\pi_k$\\
-S & in-sample Sharpe ratio of the current tree's replayed path\\
+path (of a tree, over rows) & the trajectory the tree would have traded over those rows, produced by \Replay: per date, the holdings before the decision, the decision $w_t$, the fee, the net return, the row regret; plus the Sharpe ratio $S$ of the net returns. Not a root-to-leaf route in the tree\\
+S & the Sharpe ratio of the current tree's path over the fitting rows (in-sample)\\
 \bottomrule
 \end{tabularx}
 
@@ -87,38 +88,55 @@ $\kappa=\text{soft-split temperature}=0$.
 \fitdiagram{\begin{tikzpicture}[node distance=5mm and 6mm]
 \node[dat] (rows) {rows $(x_t, r_t, \Sigma_t)$\\ $F$ then $C$};
 \node[blk, right=of rows] (grow) {\Grow{$F$}\\ blocks 4--6};
-\node[blk, right=of grow] (refit) {\RefitAll{$F$, keep iff $S'\ge S$}\\ block 7};
+\node[blk, right=of grow] (refit) {\RefitAll{tree, $F$}\\ block 7};
 \node[blk, right=of refit] (prune) {\Prune{$C$}\\ block 8};
-\node[blk, right=of prune] (final) {\RefitAll{$F\cup C$, always}\\ block 7};
+\node[blk, right=of prune] (final) {\RefitAll{tree, $F\cup C$}\\ block 7};
 \node[res, right=of final] (tree) {frozen tree\\ $x\mapsto\hat c(x)$};
 \draw[arr] (rows)--(grow); \draw[arr] (grow)--(refit); \draw[arr] (refit)--(prune); \draw[arr] (prune)--(final); \draw[arr] (final)--(tree);
 \end{tikzpicture}}
 \end{center}
 \begin{algorithm}[H]
 \caption{\texttt{MAIN}: \texttt{SPOPortfolioTree.fit}}
-\KwIn{rows $t=1..T$; $T_f=0.75T$; $F=\{1, ..., T_f\}$, $C=\{T_f+1, ..., T\}$}
-root, leaves, path $\gets$ \Grow{$F$}\;
-\RefitAll{leaves, path, rows $=F$, always $=$ false}\;
-\Prune{root}\;
-route all rows $F\cup C$ through the pruned tree; path $\gets$ \Replay{\Scores{leaves}, $F\cup C$, $u_1=\1/n$}; \Measure{path}\;
-\RefitAll{leaves, path, rows $=F\cup C$, always $=$ true}\;
-\KwOut{the tree; in use: $w_t=w^\star(\hat c(x_t);u_t,\Sigma_t)$ with the live holdings $u_t$}
+\KwIn{rows $1..T$ in time order; $F$ = the first $75\%$ (fitting), $C$ = the last $25\%$ (checking)}
+tree $\gets$ \Grow{$F$} \tcp*{splits and leaf scores, from $F$ only}
+\RefitAll{tree, $F$} \tcp*{leaf scores recomputed on the final path; kept only if the Sharpe on $F$ does not drop}
+\Prune{tree, $C$} \tcp*{remove every split that $C$ does not confirm}
+\RefitAll{tree, $F\cup C$} \tcp*{leaf scores recomputed on all rows; always kept}
+\KwOut{tree: split rules $(j,\theta)$ and one score $\hat c_\ell$ per leaf}
 \end{algorithm}
 
 \section{REPLAY: the path, the fees, the row regrets}
-Fees are computed here and nowhere else. One date:
+\textbf{Path.} Feeding a tree with the rows $t=1,2,\dots$ in time order, each date's decision starting from the holdings the previous date left, gives the trajectory the tree would have traded: holdings, decision, fee, net return and regret on every date, and the Sharpe ratio of the net returns. This trajectory is the \emph{path} of the tree over those rows.
+
+\begin{algorithm}[H]
+\caption{\texttt{ROUTE}(tree, rows) and \texttt{SCORES}(tree, rows): the tree as one score per date}
+\Fn{\Route{tree, rows}}{
+  \ForEach{date $t$ in rows}{send $x_t$ down the tree: at a split node ``$x_j\le\theta$?'' go left if $x_{tj}\le\theta$, else right, until a leaf $\ell(t)$ is reached\;}
+  \Return rows$_\ell=\{t:\ell(t)=\ell\}$ for every leaf $\ell$ \tcp*{the dates each leaf receives}
+}
+\Fn{\Scores{tree, rows}}{
+  \Route{tree, rows};\quad scores$_t\gets\hat c_{\ell(t)}$ for every date $t$ in rows\;
+  \Return the matrix (scores$_t$)$_{t\in\text{rows}}$, one row per date \tcp*{soft splits: scores$_t=\sum_\ell\omega_{t\ell}\hat c_\ell$}
+}
+\end{algorithm}
+
+Fees are computed in \Replay\ and nowhere else. One date:
 \begin{center}
-\fitdiagram{\begin{tikzpicture}[node distance=4mm and 5mm]
-\node[dat] (u) {holdings $u$\\ ($=\U[t]$)};
-\node[blk, right=of u] (opt) {$w_t=w^\star(\text{score}_t;\,u,\Sigma_t)$};
-\node[blk, right=of opt] (fee) {fee$_t=f^\top|w_t-u|$};
-\node[blk, right=of fee] (net) {net$_t=r_t^\top w_t-\text{fee}_t$};
-\node[blk, right=of net] (drift) {$u\gets \dfrac{w_t\circ(1+r_t)}{1+r_t^\top w_t}$\\ (fee not in the drift)};
-\node[blk, below=of opt] (hind) {$w^{\mathrm{hind}}_t=w^\star(r_t;\,u,\Sigma_t)$\\ $\B[t]=\text{utility}(w^{\mathrm{hind}}_t;r_t,u,\Sigma_t)$};
-\node[blk, below=of net] (reg) {utility$_t=$ net$_t-\lambda w_t^\top\Sigma_tw_t$\\ regret$_t=\B[t]-$ utility$_t$};
-\draw[arr] (u)--(opt); \draw[arr] (opt)--(fee); \draw[arr] (fee)--(net); \draw[arr] (net)--(drift);
-\draw[arr] (u.south) |- (hind.west); \draw[arr] (hind)--(reg); \draw[arr] (net)--(reg);
-\draw[arr] (drift.south) |- ++(0,-2.6) -| node[lbl, pos=0.25] {next date $t+1$} (u.south);
+\fitdiagram{\begin{tikzpicture}[node distance=3.5mm and 8mm]
+\node[dat] (u) {date $t$: holdings $u$ \quad (stored as $\U[t]$)};
+\node[blk, below=of u] (opt) {decision: $w_t=w^\star(\text{score}_t;\,u,\Sigma_t)$};
+\node[blk, below=of opt] (fee) {fee$_t=f^\top|w_t-u|$};
+\node[blk, below=of fee] (net) {net$_t=r_t^\top w_t-\text{fee}_t$};
+\node[blk, below=of net] (util) {utility$_t=$ net$_t-\lambda\,w_t^\top\Sigma_tw_t$};
+\node[blk, below=of util] (drift) {drift: $u\gets\dfrac{w_t\circ(1+r_t)}{1+r_t^\top w_t}$ \quad (the fee is not in the drift)};
+\node[blk, right=of opt] (hind) {hindsight decision, same $u$:\\ $w^{\mathrm{hind}}_t=w^\star(r_t;\,u,\Sigma_t)$\\ $\B[t]=\text{utility}(w^{\mathrm{hind}}_t;\,r_t,u,\Sigma_t)$};
+\node[blk, right=of util] (reg) {regret$_t=\B[t]-\text{utility}_t\ \ge0$};
+\node[res, below=of drift] (end) {after the last date: $S=\mathrm{mean}(\text{net})/\mathrm{std}(\text{net})$;\quad return $\U$, $w$, net, regret, $S$, final $u$};
+\draw[arr] (u)--(opt); \draw[arr] (opt)--(fee); \draw[arr] (fee)--(net); \draw[arr] (net)--(util); \draw[arr] (util)--(drift);
+\draw[arr] (u.east) -| (hind.north);
+\draw[arr] (hind)--(reg); \draw[arr] (util)--(reg);
+\draw[arr] (drift.west) -- ++(-6mm,0) |- node[lbl, pos=0.25, rotate=90] {next date $t+1$} (u.west);
+\draw[arr, dashed] (drift.south) -- node[lbl] {last date} (end.north);
 \end{tikzpicture}}
 \end{center}
 \begin{algorithm}[H]
@@ -138,42 +156,87 @@ $S\gets\mathrm{mean}(\text{net})/\mathrm{std}(\text{net})$ \tcp*{$0$ if net $\eq
 
 \section{The row regret and the score search of a leaf}
 \begin{algorithm}[H]
-\caption{\texttt{REG}($c$, $t$) (\texttt{\_regret\_rows}) and \texttt{FIT\_LEAF}(rows, $\omega$, fallback) (\texttt{\_fit\_leaf})}
+\caption{\texttt{REG}($c$, $t$) (\texttt{\_regret\_rows}) and \texttt{FIT\_LEAF}(rows, $\omega$, $c_{\mathrm{alt}}$) (\texttt{\_fit\_leaf})}
 \Fn{\Reg{$c$, $t$}}{
-  $w\gets w^\star(c;\U[t],\Sigma_t)$;\quad \Return $\max\big(\B[t]-\text{utility}(w;r_t,\U[t],\Sigma_t),\,0\big)$ \tcp*{abort if $<-10^{-6}$}
+  $w\gets w^\star(c;\U[t],\Sigma_t)$\;
+  \Return $\max\big(\B[t]-\text{utility}(w;r_t,\U[t],\Sigma_t),\,10^{-6}\big)$\;
 }
-$L(c)\;:=\;\sum_{t\in\text{rows}}\omega_t\,\Reg(c,t)$ \tcp*{leaf regret of a score vector}
-\Fn{\FitLeaf{rows, $\omega$, fallback}}{
-  $c\gets\mathrm{clip}\big(\sum_t\omega_tr_t/\sum_t\omega_t,\ -b,\ b\big)$ \tcp*{start: the weighted mean return}
-  \If{fallback given \KwAnd $L(\text{fallback})<L(c)$}{$c\gets$ fallback}
-  radius $\gets2b$\;
-  \For{pass $=1,2,3$}{
-    \For{coord in (asset, cash)}{
-      grid $\gets$ 7 equally spaced values in $[c_{\text{coord}}-\text{radius},\,c_{\text{coord}}+\text{radius}]\cap[-b,b]$ \tcp*{pass 1: all of $[-b,b]$}
-      $c_{\text{coord}}\gets$ the grid value with the smallest $L$, if strictly smaller than the current $L(c)$\;
-    }
-    radius $\gets$ radius$/6$\;
+$L(c)\;:=\;\sum_{t\in\text{rows}}\omega_t\,\Reg(c,t)$ \tcp*{leaf regret of a score $c$: one regret per date, summed}
+\BlankLine
+\Fn{\FitLeaf{rows, $\omega$, $c_{\mathrm{alt}}$}}{
+  \tcp{goal: the score $c\in[-b,b]$ with the smallest $L(c)$; a grid search, refined twice}
+  $c\gets\mathrm{clip}\big(\sum_{t\in rows} \omega_t r_t / \sum_{t\in rows} \omega_t,\ [-b,b]\big)$ \tcp*{start 1: the mean return}
+  \If{$c_{\mathrm{alt}}$ is given \KwAnd $L(c_{\mathrm{alt}})<L(c)$}{$c\gets c_{\mathrm{alt}}$ \tcp*{start 2: an alternative score, see below}}
+  \For{$h$ in $(b,\ b/3,\ b/18)$}{
+    grid $\gets$ 7 equally spaced values in $[c-h,\,c+h]\cap[-b,b]$\;
+    $c\gets$ the grid value with the smallest $L$, if smaller than $L(c)$ \tcp*{otherwise $c$ stays}
   }
-  \Return node$(\hat c=c,\ n=\sum\omega,\ L=L(c))$\;
+  \Return $(c,\ L(c))$\;
 }
 \end{algorithm}
-Cost: $2+3\cdot7\cdot n$ evaluations of $L$, each one vectorised optimizer call over the leaf's rows. Only score differences matter, so the cash coordinate is redundant; cash is reported as $0$.
+\textbf{The three passes}, with $b=10\%$: pass 1 covers $[-10\%,10\%]$ in steps of $3.3\%$; pass 2 covers $\pm3.3\%$ around the best value in steps of $1.1\%$; pass 3 covers $\pm0.56\%$ in steps of $0.19\%$. So a leaf score is a multiple of $0.19\%$ near the best point. Cost: $2+3\cdot7$ evaluations of $L$ per coordinate. The code runs the passes on the asset score and on the cash score in turn; only their difference matters, so everything here is written for the asset score with cash at $0$.
+
+\textbf{The alternative start $c_{\mathrm{alt}}$.} A second candidate offered to the search, kept only if it beats the mean-return start:
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item root: none;.
+\item child of a candidate split: the score of the leaf being split (its yardstick $P.\hat c$), so that a child may simply inherit its parent's score.
+\item a leaf whose score is searched again: its current score, so that the new search cannot end worse than the score it replaces.
+\end{itemize}
 
 \section{GROW}
+Growth adds one split per round. A round has three parts: every leaf proposes its best candidate splits with their regret reduction $\Delta$ (\BestSplit, block 5); the candidates of all leaves are ranked by $\Delta$ and tried in that order on the whole tree, the first one whose path raises $S$ being accepted; the path of the accepted tree becomes the reference for the next round (its holdings and hindsight utilities go into $\U$, $\B$). Growth stops when no candidate passes.
+\begin{center}
+\fitdiagram{\begin{tikzpicture}[node distance=5mm and 6mm]
+\node[blk] (init) {\textbf{root leaf}: $\U\equiv\1/n$\\ $\hat c_{\mathrm{root}}\gets$ \FitLeaf{$F$, $\1$, none}};
+\node[blk, right=of init] (rep) {\Replay{tree, $F$, $\1/n$}\\ \Measure: $\U$, $\B$, $S$};
+\node[blk, right=of rep] (bs) {\BestSplit{tree, $S$}\\ block 5};
+\node[dec, right=of bs] (q) {a split\\ accepted?};
+\node[res, right=of q] (stop) {stop:\\ return tree};
+\node[blk, below=7mm of bs] (meas) {path $\gets$ path$'$ of the new tree\\ \Measure: new $\U$, $\B$, $S$};
+\node[blk, right=of meas] (upd) {leaf $\ell\to$ split node ``$x_j\le\theta$?''\\ with its two new leaves};
+\draw[arr] (init)--(rep); \draw[arr] (rep)--(bs); \draw[arr] (bs)--(q);
+\draw[arr] (q)--node[lbl]{no}(stop); \draw[arr] (q.south) -- node[lbl, right]{yes} (q.south |- upd.north); \draw[arr] (upd)--(meas);
+\draw[arr] (meas.north) -- node[lbl, right]{next round} (bs.south);
+\end{tikzpicture}}
+\end{center}
+\begin{center}
+\fitdiagram{\begin{tikzpicture}[node distance=4mm and 6mm,
+  sp/.style={draw, thick, rounded corners=2pt, fill=navy!10, align=center, inner sep=3pt, font=\scriptsize},
+  lf/.style={draw, thick, rounded corners=2pt, fill=leaf!15, align=center, inner sep=3pt, font=\scriptsize}]
+\node[sp] (r1) {$x_1\le\theta_0$?};
+\node[lf, below left=5mm and 1mm of r1] (a1) {leaf A\\ $\hat c_A$, rows$_A$};
+\node[lf, below right=5mm and 1mm of r1] (b1) {leaf $\ell$\\ $\hat c_\ell$, rows$_\ell$};
+\draw[arr] (r1)--(a1); \draw[arr] (r1)--(b1);
+\node[font=\small, right=14mm of r1, yshift=-6mm] (arrow) {$\xrightarrow{\ \text{round accepts the split } (\ell,\,j,\,\theta)\ }$};
+\node[sp, right=14mm of arrow, yshift=6mm] (r2) {$x_1\le\theta_0$?};
+\node[lf, below left=5mm and 1mm of r2] (a2) {leaf A\\ $\hat c_A$, rows$_A$};
+\node[sp, below right=5mm and 1mm of r2] (b2) {$x_j\le\theta$?\\ (was leaf $\ell$)};
+\node[lf, below left=5mm and -3mm of b2] (l2) {left child\\ $\hat c_{\mathrm{left}}$, rows$_\ell$ with $x_j\le\theta$};
+\node[lf, below right=5mm and -3mm of b2] (rr2) {right child\\ $\hat c_{\mathrm{right}}$, the other rows$_\ell$};
+\draw[arr] (r2)--(a2); \draw[arr] (r2)--(b2); \draw[arr] (b2)--(l2); \draw[arr] (b2)--(rr2);
+\end{tikzpicture}}
+\end{center}
 \begin{algorithm}[H]
 \caption{\texttt{GROW}($F$) (\texttt{\_grow})}
-$\U[t]\gets\1/n$, $\B[t]\gets\text{utility}\big(w^\star(r_t;\1/n,\Sigma_t);r_t,\1/n,\Sigma_t\big)$ for all $t\in F$ \tcp*{convention: no path exists yet}
-root $\gets$ \FitLeaf{$F$, $\omega\equiv1$, none};\quad leaves $\gets[(\text{root},F,\1,\text{depth }0)]$\;
-path $\gets$ \Replay{\Scores{leaves}, $F$, $\1/n$};\quad \Measure{path}\;
+\KwIn{the fitting rows $F$; the training-state tables $\U$, $\B$ (one row per date) and the Sharpe $S$ are written here}
+\tcp{the root: one leaf holding all fitting rows}
+$\U[t]\gets\1/n$ for every $t\in F$ \tcp*{no path exists yet: every date starts from equal weights}
+$\B[t]\gets\text{utility}\big(w^\star(r_t;\1/n,\Sigma_t);\,r_t,\1/n,\Sigma_t\big)$ for every $t\in F$ \tcp*{hindsight utility from equal weights}
+$\hat c_{\mathrm{root}}\gets$ \FitLeaf{$F$, $\omega\equiv1$, none} \tcp*{one score for all fitting rows (Algorithm 3)}
+tree $\gets$ a single leaf: the root, with score $\hat c_{\mathrm{root}}$ and rows $F$\;
+path $\gets$ \Replay{\Scores{tree, $F$}, $F$, $u_1=\1/n$} \tcp*{trade the root score date by date (Algorithm 2)}
+\Measure{path} \tcp*{$\U$, $\B$ $\gets$ the path's holdings and hindsight utilities; $S\gets$ path.$S$}
+\tcp{the rounds: one accepted split per round}
 \While{true}{
-  result $\gets$ \BestSplit{leaves, $S$} \tcp*{block 5}
-  \If{result $=$ \KwNone}{\KwBreak}
-  leaves $\gets$ leaves $-\{\ell\}+\{\text{left child},\text{right child}\}$; node of $\ell$ becomes a split node $(j,\theta)$\;
-  path $\gets$ result.path;\quad \Measure{path} \tcp*{new holdings, new $S$; children keep the rows of step 5}
+  result $\gets$ \BestSplit{tree, $S$} \tcp*{Algorithm 5: the best admissible split of any leaf, with the path of the tree that contains it, or none}
+  \If{result $=$ \KwNone}{\KwBreak \tcp*{no candidate passed both gates}}
+  \Else{}{$(\ell,\ j,\ \theta,\ \text{left child},\ \text{right child},\ \text{path}')\gets$ result\;
+  in the tree, leaf $\ell$ becomes the split node ``$x_j\le\theta$?'' whose leaves are the two children} \tcp*{the children keep their scores and rows from Algorithm 5}
+  path $\gets$ path$'$;\quad \Measure{path} \tcp*{the accepted tree's own path: new holdings, new $S$ for the next round}
 }
-\Return root, leaves, path\;
+\Return tree\;
 \end{algorithm}
-\Scores{leaves}: the per-row score matrix, row $t$ $=\sum_\ell\omega_{t\ell}\hat c_\ell$ (one leaf per row with plain splits).
+
 
 \section{BEST\_SPLIT: one round}
 \begin{center}
@@ -214,7 +277,7 @@ cand $\gets[\,]$\;
 sort cand by $\Delta$, largest first \tcp*{SPOT's criterion, over all leaves}
 \ForEach{$(\Delta,\ell,j,\theta,\text{Lc},\text{Rc})$ in cand}{
   trial $\gets$ leaves with $\ell$ replaced by $(\text{Lc},\text{left rows}),(\text{Rc},\text{right rows})$ \tcp*{other leaves unchanged}
-  path$'\gets$ \Replay{\Scores{trial}, $F$, $\1/n$} \tcp*{whole tree, whole fitting period, fees included}
+  path$'\gets$ \Replay{\Scores{trial, $F$}, $F$, $\1/n$} \tcp*{whole tree, whole fitting period, fees included}
   \If{path$'$.$S>S+\varepsilon_S$}{\Return (split, path$'$) \tcp*{Sharpe gate: in-sample; one acceptance per round}}
 }
 \Return \KwNone\;
@@ -252,14 +315,16 @@ $m_\ast\gets\max(m,\lceil\varphi\sum\omega\rceil)$;\quad screened $\gets[\,]$\;
 }
 \end{algorithm}
 
-\section{REFIT\_ALL}
+\section{RESCORE: the leaf scores again, on a given set of rows}
 \begin{algorithm}[H]
-\caption{\texttt{REFIT\_ALL}(leaves, path, rows, always) (\texttt{\_refit\_leaves})}
-\ForEach{leaf $\ell$}{$\hat c'_\ell\gets$ \FitLeaf{rows$_\ell$, $\omega_\ell$, $\hat c_\ell$} \tcp*{from the current $\U$ (the path of the final tree)}}
-path$'\gets$ \Replay{scores with $\hat c'$, rows, $\1/n$}\;
-\If{always \KwOr path$'$.$S\ge$ path.$S$}{write every $\hat c'_\ell$ into its leaf \tcp*{all or nothing}}
+\caption{\texttt{RESCORE}(tree, rows) (\texttt{\_refit\_leaves})}
+send the rows down the tree: rows$_\ell$ for every leaf $\ell$\;
+path $\gets$ \Replay{\Scores{tree, rows}, rows, $\1/n$};\quad \Measure{path} \tcp*{holdings of the tree on these rows}
+\ForEach{leaf $\ell$}{$\hat c'_\ell\gets$ \FitLeaf{rows$_\ell$, $\omega_\ell$, $\hat c_\ell$}}
+path$'\gets$ \Replay{scores with the $\hat c'$, rows, $\1/n$}\;
+\eIf{rows $=F$ \KwAnd path$'$.$S<$ path.$S$}{keep the old scores $\hat c_\ell$}{write every $\hat c'_\ell$ into its leaf}
 \end{algorithm}
-Step 4 (after growth): rows $=F$, kept only if $S$ does not fall. Step 6 (after pruning): rows $=F\cup C$ routed through the pruned tree, \Measure\ first, always kept: the scores it replaces never saw $C$.
+Called twice. After growth, on $F$: the new scores replace scores fitted on the same rows, so the Sharpe test applies. After pruning, on $F\cup C$: the old scores never saw $C$, so the new ones are always written.
 
 \section{PRUNE: bottom-up on the checking rows}
 \begin{center}
@@ -282,7 +347,7 @@ Step 4 (after growth): rows $=F$, kept only if $S$ does not fall. Step 6 (after 
   \If{$\nu$ is a leaf}{\Return}
   \Visit{left child, its rows, its weights, depth$+1$};\quad \Visit{right child, \dots} \tcp*{children first}
   WITH $\gets$ \CheckPath{tree as it is}\;
-  \Measure{\Replay{\Scores{current leaves}, $F$, $\1/n$}} \tcp*{holdings for the leaf fit}
+  \Measure{\Replay{\Scores{tree, $F$}, $F$, $\1/n$}} \tcp*{holdings for the leaf fit}
   $\hat c_\nu\gets$ \FitLeaf{rows$_\nu$, $\omega_\nu$, $\nu.\hat c$};\quad make $\nu$ a leaf with $\hat c_\nu$, detaching the subtree\;
   WITHOUT $\gets$ \CheckPath{tree with $\nu$ as a leaf}\;
   $g_t\gets$ WITHOUT.regret$_t-$ WITH.regret$_t$ for $t\in C$;\quad $\bar g\gets\mathrm{mean}(g)$;\quad se $\gets\mathrm{std}(g)/\sqrt{|C|}$\;
@@ -292,7 +357,7 @@ Step 4 (after growth): rows $=F$, kept only if $S$ does not fall. Step 6 (after 
 \Visit{root, $F$, $\1$, 0}\;
 \BlankLine
 \Fn{\CheckPath{tree}}{
-  scores $\gets$ \Route{all rows $F\cup C$}\;
+  scores $\gets$ \Scores{tree, $F\cup C$}\;
   $u_C\gets$ final holdings of \Replay{scores$_F$, $F$, $\1/n$};\quad \Return \Replay{scores$_C$, $C$, $u_C$} \tcp*{fees included; regrets and $S$ on $C$ only}
 }
 \end{algorithm}
@@ -322,7 +387,7 @@ REPLAY, fees, drift & \code{replay_path}, \code{_trade}; \code{SPOPortfolioTree.
 REG, FIT\_LEAF & \code{_regret_rows}, \code{_score_prediction}, \code{_fit_leaf}\\
 GROW, BEST\_SPLIT & \code{_grow}, \code{_best_split}, \code{_scores}, \code{_leaves}\\
 SHORTLIST, SCREEN & \code{_shortlist}, \code{_screen}, \code{_thresholds}, \code{_standard_error}, \code{_membership_of}\\
-REFIT\_ALL & \code{_refit_leaves}\\
+RESCORE & \code{_refit_leaves}\\
 PRUNE, CHECK\_PATH & \code{_prune} (inner \code{visit}, \code{checking_path})\\
 optimizer & \code{PortfolioOptimizer.solve} ($5^n$ enumeration), \code{PortfolioOptimizer.utility}\\
 \bottomrule
