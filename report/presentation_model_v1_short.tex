@@ -225,7 +225,7 @@ U_t(w)&=r_t^\top w-f^\top|w-u_t|-\lambda\,w^\top\Sigma_t w\\
 $g_t=\Reg_t(\text{without})-\Reg_t(\text{with})$; keep iff $\bar g>10^{-6}$, $\ \bar g>k_p\,\mathrm{se}(\bar g)$ [$k_p=2$ below the root, $0$ at the root], checking Sharpe $\uparrow$
 \item[6.] score search again on all training rows
 \end{enumerate}
-\textbf{Gates 1--2: in-sample. Gate 5: the only out-of-sample judge.}
+\textbf{Gates 1--2: in-sample. Gate 5: out-of-sample.}
 \end{frame}
 
 \section{Model v1: the split-search options and the frozen configuration}
