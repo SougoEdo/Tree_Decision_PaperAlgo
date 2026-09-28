@@ -120,7 +120,7 @@
 \begin{tikzpicture}[scale=0.74, every node/.style={transform shape, font=\scriptsize},
   box/.style={draw, rounded corners=2pt, inner sep=3pt, fill=black!4}, arr/.style={-{Stealth[length=1.6mm]}, thick}]
 \node[box] (x) {date $t$: $x_t$};
-\node[box, right=0.25cm of x] (route) {questions};
+\node[box, right=0.25cm of x] (route) {splits};
 \node[box, right=0.25cm of route] (leaf) {leaf $\ell$: $\hat c_\ell$};
 \node[box, right=0.25cm of leaf] (opt) {optimizer $(u_t,\Sigma_t)$};
 \node[box, right=0.25cm of opt] (w) {$w_t$};
@@ -146,11 +146,11 @@
 \column{0.5\textwidth}
 \textbf{Notation}
 \begin{itemize}
-\item $u$: holdings before the decision, $u_{t+1}=\dfrac{w_t\circ(1+r_t)}{1+r_t^\top w_t}$, $u_1=\1/n$
-\item $c$: the tree's scores, in units of the $h$-day return; cash $=0$ (only the score differences matter)
+\item $u_t$: holdings between time $\left(t-1\right)^+$ and $t^-$, $u_{t+1}=\dfrac{w_t\circ(1+r_t)}{1+r_t^\top w_t}$, $u_1=\1/n$
+\item $c$: the tree's scores, in units of the return; cash $=0$ (only the score differences matter)
 \item $\Sigma$: covariance of the $h$-day return $=h\times$ the covariance of the last 180 daily returns; $\sigma_h^2=h\hat\sigma^2$
-\item $f$: fee per traded notional, 3 bp $=0.03\%$ on the asset, 0 on cash; $\lambda=1$: risk aversion, weight of the $h$-day variance
-\item $\W=\{w:\,0\le w_i\le1,\ \sum_iw_i=1\}$
+\item $f$: fee per traded notional, 3 bp on the asset, 0 on cash; $\lambda=1$: risk aversion, weight of the $h$-day variance
+\item $\W=\{w:\,0\le w_i\le\bar{w},\ \sum_iw_i=1\}$
 \end{itemize}
 \column{0.48\textwidth}
 \textbf{Properties}
@@ -161,17 +161,46 @@
 \end{itemize}
 \end{columns}
 \[
-w^\star(c;u,\Sigma)=\argmax_{w\in\W}\ \underbrace{c^\top w}_{\text{gain}}-\underbrace{f^\top|w-u|}_{\text{fees}}-\underbrace{\lambda\,w^\top\Sigma w}_{\text{risk}}
+w^\star_t(c;u_t,\Sigma)=\argmax_{w\in\W}\ \underbrace{c^\top w}_{\text{gain}}-\underbrace{f^\top|w-u_t|}_{\text{fees}}-\underbrace{\lambda\,w^\top\Sigma w}_{\text{risk}}
 \]
-\textbf{Asset vs cash} ($w$ = asset weight, $\kappa=2\lambda\sigma_h^2$):
+\end{frame}
+
+\begin{frame}{Asset against cash: the position window and the no-trade band}
+\footnotesize
+One risky asset (weight $w$, score $c$, weight held before the decision $u$) against cash (score 0, no fee, no variance); $\kappa=2\lambda\sigma_h^2$:
+\[
+w^\star=\argmax_{0\le w\le1}\ c\,w-f\,|w-u|-\tfrac{\kappa}{2}\,w^2
+\]
+\vspace{-2mm}
+\begin{columns}[T]
+\column{0.44\textwidth}
+\textbf{Without fee} ($f=0$): $w^\star=c/\kappa$, clipped to $[0,\bar{w}]$.
+\begin{itemize}
+\item the position is linear in the score inside the \emph{position window} $0\le c\le\bar{w}\kappa$: all cash below 0, fully invested above $\kappa$
+\item $\lambda=1$, weekly, $\sigma=1\%$ a day: $\kappa=2\cdot1\cdot5\cdot(1\%)^2=0.1\%$ per 5 days
+\end{itemize}
+\column{0.54\textwidth}
+\textbf{With a fee} $f$ per traded notional: moving away from $u$ costs $f|w-u|$, so the score must beat the fee before anything moves:
 \[
 w^\star=\begin{cases}
-\min\{(c-f)/\kappa,\,1\} & c-\kappa u>f \ \text{(buy)}\\
+\min\{(c-f)/\kappa,\,\bar{w}\} & c-\kappa u>f \ \text{(buy)}\\
 \max\{(c+f)/\kappa,\,0\} & c-\kappa u<-f \ \text{(sell)}\\
 u & |c-\kappa u|\le f \ \text{(no trade)}
 \end{cases}
 \]
-\textbf{v1} (5-day returns): $\kappa=2\cdot1\cdot5\cdot(1\%)^2=0.1\%$; $w:0\to1$ for $c:0.03\%\to0.13\%$; leaf scores $\pm0.3$--$0.5\%$ $\Rightarrow$ \alert{$w\in\{0,1\}$}; continuous sizing needs $\lambda\ge5$
+\end{columns}
+\textbf{The no-trade band} is $|c-\kappa u|\le f$: half-width $f=3$ bp around $\kappa u$, the score that would justify the position already held. A score inside it leaves the portfolio as it is, whatever it holds.
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+decision rate & window $\kappa$ & band half-width $f$ & band / window\\
+\midrule
+weekly ($h=5$) & 0.10\% & 0.03\% & 30\%\\
+twice a week ($h=2$) & 0.04\% & 0.03\% & 75\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{v1}: leaf scores of $\pm0.3$--$0.5\%$ per 5 days sit far outside the window $\Rightarrow$ \alert{$w\in\{0,1\}$}; continuous sizing needs $\lambda\ge5$. But a score near 0 with a drifted $u$ sits inside the band, and the tree then holds that mix (E10).
 \end{frame}
 
 \begin{frame}{The loss: decision regret; the score of a leaf}
@@ -181,20 +210,20 @@ U_t(w)&=r_t^\top w-f^\top|w-u_t|-\lambda\,w^\top\Sigma_t w\\
 \end{align*}
 \centerline{\small hindsight decision $-$ decision on $c$ (given the same holdings $u_t$)}
 \[
-\hat c_\ell=\argmin_{c\in[-b,b]^n}\ \sum_{t\in\ell}\Reg_t(c),\qquad b=10\%\ \text{per holding period, bound + resolution}
+\hat c_\ell=\argmin_{c\in[-b,b]^n}\ \sum_{t\in\ell}\Reg_t(c),\qquad b=10\%\ \text{per holding period, needed for bound + resolution}
 \]
 \begin{columns}[T]
 \column{0.48\textwidth}
 \textbf{Leaf score}
 \begin{itemize}
-\item one regret per date, summed over the leaf's dates
+\item one regret per date ($r_t$ depends on $t$), summed over the leaf's dates
 \item bounded coordinate search: 3 passes $\times$ 7 values
 \item not a forecast: same regret for any score on the right side
 \end{itemize}
 \column{0.48\textwidth}
 \textbf{Consequences}
 \begin{itemize}
-\item fees $\Rightarrow$ regret depends on $u_t$ $\Rightarrow$ holdings from a replay of the tree
+\item fees $\Rightarrow$ regret depends on $u_t$ $\Rightarrow$ holdings are frozen for the round (no backpropagation) then replayed (drifted) 
 \item only differences: relative returns, asset vs cash $\implies$ help to choose the right features
 \item same $\Sigma_t$ as the optimizer: unseen risk not learnt
 \end{itemize}
@@ -234,7 +263,7 @@ $g_t=\Reg_t(\text{without})-\Reg_t(\text{with})$; keep iff $\bar g>10^{-6}$, $\ 
 \scriptsize
 \textbf{Common}: admissible candidates $\theta_{(1)}<\dots<\theta_{(K)}$ (each side $\ge m_\ast=\max(m,\lceil\varphi N\rceil)$ rows; $m=20$, $\varphi=10\%$); cheap screen
 \[
-Q(\theta)=\sum_{t\in I}\Reg_t\big(c_{\mathrm{side}(t)}(\theta)\big),\qquad c_{\mathrm{left}}(\theta)=\mathrm{clip}\big(\mathrm{mean}\{r_t: x_t\le\theta\},\pm b\big),\ \text{idem right}
+Q(\theta)=\sum_{t\in I}\Reg_t\big(c_{\mathrm{side}(t)}(\theta)\big),\qquad c_{\mathrm{left}}(\theta)=\mathrm{clip}\big(\mathrm{mean}\{r_t: x_t\le\theta\},\pm b\big),\ \textit{cf Theorem 1, } \text{idem right}
 \]
 \begin{columns}[T]
 \column{0.5\textwidth}
@@ -243,7 +272,7 @@ Q(\theta)=\sum_{t\in I}\Reg_t\big(c_{\mathrm{side}(t)}(\theta)\big),\qquad c_{\m
 \item keep ranks $\mathrm{round}(q(K-1))$, $q=0.1,\dots,0.9$: 9 screens instead of $K\approx N-2m_\ast$
 \item refinement: screen every candidate between the two deciles around the best one, $\theta_\circ$; best of them $\theta_\bullet$
 \item replace iff $Q(\theta_\circ)-Q(\theta_\bullet)>k\,\mathrm{se}$, $\ \mathrm{se}=\sqrt{|I|}\,\mathrm{std}_t(\delta_t)$, $k=1$
-\item 3 best survivors $\to$ full fit of the children
+\item 3 best survivors ranked by $Q$; replay the first, then the second, then the third; keep iff Sharpe $\uparrow$
 \end{itemize}
 \column{0.48\textwidth}
 \textbf{Soft split} (off in v1: $\kappa=0$)
@@ -479,12 +508,11 @@ deciles + refin.\ + hurdle below root & 0.80 & 0.79\\
 \column{0.52\textwidth}
 \footnotesize
 \begin{itemize}
-\item \textbf{no option beats the base beyond noise}; what is left is threshold noise
-\item depth 3: nothing (a maximum); $\lambda=5$--$10$: gradual positions, learnt; 10 bp: fast rates stop trading
-\item deciles + refinement: = base, 9 candidates instead of hundreds, steadier thresholds $\Rightarrow$ \good{in v1}
-\item soft splits: $\kappa=1$ score in the no-trade band; $\kappa=0.25$ = base from weekly on, loses at 2 days $\Rightarrow$ \bad{off} (smoothing the score $\ne$ sizing the position at $\lambda=1$)
-\item hurdle at every node: loses true root splits (25\% block has no power at 2 s.e.) $\Rightarrow$ \bad{off}
-\item hurdle below the root: second-level leaves 25/10/5/5\% $\to$ 5/0/0/0\%, no cost from weekly on $\Rightarrow$ \good{in v1}
+\item \textbf{No option beats the base beyond noise.} Every difference sits inside two standard errors; what remains is the noise of the threshold itself.
+\item \textbf{Depth, risk aversion and fees do what they should.} Depth 3 changes nothing, one threshold needs one split; $\lambda=5$--$10$ gives gradual positions at a cost of 0.1 to 0.15; a 10 bp fee stops the fast rates from trading.
+\item \textbf{Deciles with refinement, kept in v1.} Same Sharpe as screening every threshold, with 9 candidates instead of hundreds and steadier thresholds.
+\item \textbf{A pruning hurdle at every node, root included: not kept.} Asking the root split to beat two standard errors on the checking rows removes true root splits: the last quarter of the training period is too short to certify a split at that confidence.
+\item \textbf{The hurdle below the root only, kept in v1.} It removes the spurious second-level leaves, from 25\% of the trees to 5\% at twice a week and to none from weekly on, at no cost in Sharpe from weekly on.
 \end{itemize}
 \end{columns}
 \end{frame}
@@ -532,6 +560,20 @@ same 100 datasets (seeds 0--99); Sharpe: annualized test Sharpe ratio; 2nd level
 {\scriptsize Same 100 datasets for v1 and the base (seeds 0--99), 15 years of training, 5 of test. Left: annualized test Sharpe ratio of v1 minus that of the base, dataset by dataset; mean and two standard errors. Right: share of the datasets whose tree keeps a second-level split, at a drift of $\pm25\%$ a year.}
 \end{frame}
 
+\begin{frame}{E9: the distribution of the first threshold, v1 against the base}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_threshold_hist}
+
+{\scriptsize Same 100 datasets per panel, weekly decisions, $\lambda=1$, fee 3 bp. Every tree that splits on $x$ contributes its first threshold; the planted value is 0. Model v1 in orange, the base in grey.}
+\end{frame}
+
+\begin{frame}{E9: the first threshold by decision rate, v1 against the base}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_threshold_rate}
+
+{\scriptsize E9, $\lambda=1$, fee 3 bp, 100 datasets per box. Boxes: median and quartiles over the trees that split on $x$; whiskers at 1.5 interquartile ranges, dots beyond. The planted value is 0.}
+\end{frame}
+
 \begin{frame}{What can be found at all: resolution against volatility and feature noise (E6)}
 \begin{columns}[T]
 \column{0.52\textwidth}
@@ -574,6 +616,13 @@ $x+\tau\varepsilon$ observed & 0 & 0.10 & 0.12 & 0.69 / 0.87\\
 {\scriptsize Model v1, weekly decisions, fee 3 bp, 16\% volatility, half-life of $x$ 35 days. The drift goes from $\pm5$ to $\pm38\%$ a year, that is a Sharpe ratio of the regime drift from 0.3 to 2.4; 50 datasets per point (100 at 0.8 and 1.6). Left: the first threshold found, mean and one standard deviation over the datasets that split; the planted value is 0. Right: share of the datasets whose first threshold is within 0.25 of it.}
 \end{frame}
 
+\begin{frame}{E10: the distribution of the first threshold by signal strength}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_threshold_signal}
+
+{\scriptsize E10, weekly decisions, fee 3 bp, 16\% volatility, half-life 35 days. The number above each box is how many of the 50 datasets (100 at 0.8 and 1.6) kept a split on $x$. Boxes: median and quartiles; whiskers at 1.5 interquartile ranges; dots beyond. At $\lambda=5$ the whole distribution sits above the planted value.}
+\end{frame}
+
 \begin{frame}{E10: the Sharpe ratio against the strength of the signal, with and without fees}
 \centering
 \includegraphics[width=0.92\textwidth]{deck_signal_sharpe}
@@ -588,11 +637,11 @@ $x+\tau\varepsilon$ observed & 0 & 0.10 & 0.12 & 0.69 / 0.87\\
 {\scriptsize Same sweep, fee 3 bp. Left: share of the datasets where pruning leaves a single leaf. Right: share where a split below the root survives; the market has one threshold, so such splits are spurious.}
 \end{frame}
 
-\begin{frame}{E10: the price volatility, at a fixed drift of $\pm25\%$ a year}
+\begin{frame}{E10: does only the Sharpe ratio matter? Volatility sweep against drift sweep}
 \centering
 \includegraphics[width=\textwidth]{deck_volatility}
 
-{\scriptsize Model v1, weekly, fee 3 bp, half-life 35 days, 50 datasets per point. The drift stays at $\pm25\%$ a year while the volatility goes from 8 to 48\% a year, so the Sharpe ratio of the regime drift falls from 3.2 to 0.5. Grey: the ideal rule at $\lambda=1$.}
+{\scriptsize Model v1, $\lambda=1$, weekly, fee 3 bp, half-life 35 days, 50 datasets per point. Orange: the sweep of frame 22, the drift raised at a fixed 16\% volatility. Blue: the volatility raised from 8 to 48\% a year at a fixed drift of $\pm25\%$, which lowers the same Sharpe ratio from 3.2 (8\%) to 0.5 (48\%). \textbf{Why this frame:} if the Sharpe ratio of the drift were all that counted, the two curves would coincide. They do down to 24\% volatility; at 32--48\% the blue points fall below, because the risk term $\kappa=2\lambda\sigma^2$ becomes as large as the drift, the ideal position turns into a ramp, and the threshold shifts up, as it does at $\lambda=5$.}
 \end{frame}
 
 \begin{frame}{E10: where the second-level thresholds land}
@@ -609,11 +658,18 @@ $x+\tau\varepsilon$ observed & 0 & 0.10 & 0.12 & 0.69 / 0.87\\
 {\scriptsize Model v1, $\lambda=1$, fee 3 bp, drift $\pm25\%$ a year, 16\% volatility, 50 datasets per point. The half-life of $x$ goes from 2 to 69 days (35 days everywhere else in this deck); decisions weekly or twice a week.}
 \end{frame}
 
+\begin{frame}{E10: the distribution of the first threshold by half-life}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_threshold_halflife}
+
+{\scriptsize E10, $\lambda=1$, fee 3 bp, drift $\pm25\%$ a year, 16\% volatility. The number above each box is how many of the 50 datasets (100 at 35 days) kept a split on $x$. Boxes: median and quartiles; whiskers at 1.5 interquartile ranges; dots beyond.}
+\end{frame}
+
 \begin{frame}{E10: the half-life of the feature: the Sharpe ratio}
 \centering
 \includegraphics[width=0.92\textwidth]{deck_halflife_sharpe}
 
-{\scriptsize Same sweep. Annualized test Sharpe ratio of the tree and of the ideal rule; at weekly decisions also the tree without fees.}
+{\scriptsize Same sweep. Annualized test Sharpe ratio of the tree with the 3 bp fee, of the tree without fees, and of the ideal rule.}
 \end{frame}
 
 \begin{frame}{E10: the half-life of the feature: how often the tree switches}
@@ -623,14 +679,64 @@ $x+\tau\varepsilon$ observed & 0 & 0.10 & 0.12 & 0.69 / 0.87\\
 {\scriptsize Same sweep. Number of full moves between the asset and cash per year on the test period, tree and ideal rule. At 3 bp a full move costs 0.03\%, so 36 a year cost about 0.1\% a year.}
 \end{frame}
 
-\begin{frame}{E10 in five points}
+\begin{frame}{E10: the trees that freeze inside the no-trade band}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_halflife_band}
+
+{\scriptsize Model v1, $\lambda=1$, drift $\pm25\%$ a year, 16\% volatility, 50 datasets per point. With a 3 bp fee the optimizer does not trade while the score stays within $\pm0.03\%$ of what it holds; twice a week that band is as wide as the whole position window. Left: share of trees with a leaf score inside the band. Right: the annualized test Sharpe ratio of the other trees minus that of the frozen ones, same series and colours; the no-fee series has no frozen tree, so nothing to draw.}
+\end{frame}
+
+\begin{frame}{E10 in six points}
 \begin{itemize}
 \item \textbf{The Sharpe ratio of the regime drift sets the precision.} A $\pm25\%$ regime is found within 0.25 of the threshold in 8 datasets out of 10, a $\pm5\%$ one in 1 out of 4, and then half the trees keep no split. Fees change almost nothing.
 \item \textbf{Volatility acts through that Sharpe ratio}, until 32--48\% a year, where the risk term makes the ideal position gradual and the recovery drops below what the Sharpe ratio alone predicts.
 \item \textbf{At $\lambda=5$ the split sits above the threshold, on purpose.} The ideal position is a ramp in $x$; the best single split cuts it in the middle, not at $d$.
 \item \textbf{Second splits are gone.} At most 8\% of the datasets keep one.
-\item \textbf{A fast feature needs a fast decision rate, and fees are not the limit.} With a half-life of a few days, weekly decisions cannot follow the regime; the tree switches less often than the ideal rule, not more. Deciding twice a week recovers the threshold and most of the ideal Sharpe at about 0.1\% a year of fees. A slow feature is best traded weekly.
+\item \textbf{A fast feature needs a fast decision rate, and the fee bill is not the limit.} With a half-life of a few days, weekly decisions cannot follow the regime; the tree switches less often than the ideal rule, not more. Deciding twice a week recovers the threshold and most of the ideal Sharpe at about 0.1\% a year of fees.
+\item \textbf{But the fee inside the training freezes one tree in five at twice a week.} A leaf score that lands within 0.03\% of zero sits in the optimizer's no-trade band, and the tree then holds whatever it has, a drifted mix, for years: those trees earn 0.2 instead of 0.9. Without the fee in the training none freezes. This is the case for taking the fees out of the regret (v2, item 1).
 \end{itemize}
+\end{frame}
+
+\begin{frame}{E11: the second market: a threshold for the drift and one for the volatility}
+\footnotesize
+The feature is the same daily Ornstein--Uhlenbeck process; the price now has two regimes for its drift and two for its volatility ($t$ in trading days):
+\begin{gather*}
+x_{t+1}=m+e^{-k}(x_t-m)+\eta_t,\qquad \eta_t\sim\mathcal N\big(0,\,s^2(1-e^{-2k})\big)\\
+\log\frac{S_{t+1}}{S_t}=\mu_t-\tfrac12\sigma_t^2+\sigma_t\,\varepsilon_t,\qquad
+\mu_t=\begin{cases}+\mu & x_t\ge d\\ -\mu & x_t<d\end{cases},\qquad
+\sigma_t=\begin{cases}\rho\,\sigma & x_t\ge d_\sigma\\ \sigma & x_t<d_\sigma\end{cases}
+\end{gather*}
+$\sigma=1\%$ a day (16\% a year), $\rho=0.5$ (the calm regime at half the volatility), $\mu=e\sigma$ with $e=0.10$ (drift $\pm25\%$ a year), $d=0$; everything else as in the first market.
+\begin{columns}[T]
+\column{0.46\textwidth}
+\textbf{Two placements of the volatility threshold}
+\begin{itemize}
+\item $d_\sigma=d$: the bad regime is the noisy one, the usual picture of markets
+\item $d_\sigma=d+1$: the good regime is split into a stressed part, $0\le x<1$, and a calm part, $x\ge1$
+\end{itemize}
+\column{0.52\textwidth}
+\textbf{What a correct tree should do}
+\begin{itemize}
+\item the expected return given $x$ does not depend on the volatility: the drift threshold stays at $d=0$
+\item the volatility acts through the position, $w=(g_h(x)\mp f)/(2\lambda\sigma_h^2)$ clipped to $[0,1]$: at $\lambda=1$ all or nothing in both regimes, so the volatility threshold is invisible; at $\lambda=10$ about one half in the stressed good regime and one in the calm one, a second boundary at $x=1$ of size rather than of sign
+\end{itemize}
+\end{columns}
+\medskip
+Seven settings: constant volatility, $d_\sigma=d$, $d_\sigma=d+1$, each at $\lambda=1$ and $\lambda=10$, plus $d_\sigma=d+1$ at $\lambda=10$ with a 20-day covariance; decisions every 2, 5, 10 and 21 days, drifts $\pm13$ and $\pm25\%$ a year, 40 datasets per cell: 2{,}240 fits, on the base in E7 (23 September) and on model v1 in E11 (28 September).
+\end{frame}
+
+\begin{frame}{E11: the second market on model v1: the position taken by $x$}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_regime_positions}
+
+{\scriptsize E7 rerun on model v1 (E11, 2{,}240 fits): volatility 1\% a day below $x=1$ and 0.5\% above, drift threshold at 0; weekly, drift $\pm25\%$ a year, 40 datasets; median position by $x$ on the test decisions. At $\lambda=1$ the position is 0 or 1 whatever the variance. At $\lambda=10$ the ideal position is one half in the stressed part of the good regime and one in the calm part; the tree follows the ideal rule fed with the same lagged covariance, not the one that knows the true variance.}
+\end{frame}
+
+\begin{frame}{E11: the second market on model v1: no split at the volatility threshold}
+\centering
+\includegraphics[width=0.92\textwidth]{deck_regime_splits}
+
+{\scriptsize Same setting, $\lambda=10$: every threshold kept by the 40 trees, with the 180-day covariance and with a 20-day one that follows the regime. Model v1 keeps no split near the volatility threshold at all, where the base kept one in 8\% of the datasets. The boundary of the variance is invisible to the regret, which uses the same lagged covariance as the optimizer, and the pruning hurdle removes the few splits the base had found there.}
 \end{frame}
 
 \section{A fair assessment, and what comes next}
@@ -643,7 +749,7 @@ $x+\tau\varepsilon$ observed & 0 & 0.10 & 0.12 & 0.69 / 0.87\\
 \item $\pm25\%$ regime, monthly feature: recovered at every rate; 75--85\% of the attainable gain
 \item $\pm13\%$: graceful; $\pm5\%$: correctly nothing
 \item v1 = base with smaller trees, steadier thresholds (100 paired datasets); cost $0.08$ at 2 days
-\item second market (volatility regime): drift threshold found better when the calm regime pays; a variance-only boundary not learnt (lagged covariance in the regret)
+\item second market (E7 on the base, E11 on v1): drift threshold found better when the calm regime pays, Sharpes nearly double; a variance-only boundary is never learnt, by v1 not once (lagged covariance in the regret)
 \end{itemize}
 \end{block}
 \column{0.5\textwidth}

@@ -169,6 +169,21 @@ same, 20-day covariance & 2 & 78 & 81 & 2 & 0.83 & 1.13 & 1.28 & 73\% & 0.40 & 0
 \item The next test is therefore on the risk model, not on the tree: give the optimizer a variance that knows the regime and check that the second split appears at $d_\sigma$.
 \end{itemize}
 
+\section{The same settings on model v1 (E11, 28 September)}\label{sec:v1}
+\textbf{Pipeline used.} P4 in configuration v1 (command \code{run-regime-v1}, results \code{results_regime_volatility_v1.json}); the seven settings, rates and datasets of Section~\ref{sec:protocol}, 2{,}240 fits.
+
+\keybox{\textbf{In short.} Model v1 reproduces the picture of the base pipeline. With the volatility threshold at $d$ the drift threshold is found in 95--98\% of the datasets and every Sharpe ratio nearly doubles (weekly, edge 0.10, $\lambda=1$: 1.39 against 0.80 with constant volatility). With the volatility threshold at $d+1$ and $\lambda=10$, the position in the calm regime follows the ideal rule with the same lagged covariance, about 0.6 instead of the clairvoyant 1, and v1 keeps \emph{no} split within 0.25 of the volatility threshold, with the 180-day or the 20-day covariance, where the base kept one in 8\% of the datasets: the pruning hurdle removes the few the base found. Sharpe ratios are within noise of the base everywhere (weekly, edge 0.10: 0.92 against 0.85 at $d+1$ with $\lambda=10$; 1.40 against 1.54 at $d$ with $\lambda=10$, two standard errors apart), with 1.8--2.0 leaves instead of 2.0--2.4, and 0--5\% of the trees keeping a second-level split instead of 10--38\%.}
+
+\begin{figure}[H]
+\centering\includegraphics[width=0.85\linewidth]{regime_volatility_v1_positions}
+\caption{Model v1: the position taken on the test decisions by $x$, weekly, one row per setting; the tree (median and quartiles over the datasets) against the ideal rule with the same lagged covariance.}
+\end{figure}
+\begin{figure}[H]
+\centering\includegraphics[width=0.8\linewidth]{regime_volatility_v1_splits}
+\caption{Model v1: every threshold kept, per setting, with the drift threshold and the volatility threshold; no second-level split lands near the volatility threshold.}
+\end{figure}
+Reproduce: \code{python planted_threshold_experiments.py run-regime-v1}, about 50 minutes on 10 cores, then \code{plot}.
+
 \section{How to reproduce}
 \begin{itemize}\raggedright\setlength{\itemsep}{1pt}
 \item \code{python planted_threshold_experiments.py} \code{run-regime}: the seven settings, 2{,}240 fits; writes \code{results_regime_volatility.json} in \code{report/figures/}.
