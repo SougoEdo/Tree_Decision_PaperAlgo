@@ -23,8 +23,10 @@ markets M1–M2', and the experiment sections of the two reports state which one
 | 2026-09-23 11:06 | 5c2425b | tree options: quantile candidates (of the node's values), minimum leaf fraction, local refinement, soft splits with Boltzmann weights |
 | 2026-09-23 12:58 | 69de742 | quantile candidates by rank among the admissible thresholds; pruning hurdle in standard errors; `training_pipeline.tex` |
 | 2026-09-23 14:10 | 9d5bfdc | reorganisation: `code/` and `report/`, explicit file names, one model document and one experiments report |
-| 2026-09-23 (uncommitted) | | observation noise on the feature, volatility threshold, benchmark with the true regime variance; resolution and regime-volatility experiments (E6, E7); this history; P4 options and their experiment (E8) |
-| 2026-09-24 (uncommitted) | | model v1 frozen (a configuration of P4, see below); its validation on 100 datasets (E9); `run-v1` and the paired summary in `planted_threshold_experiments.py`; the beamer deck `presentation_model_v1.tex`; Configuration v1 section in the model document |
+| 2026-09-23 16:46, 17:33 | 4e94d41, c7191a3 | observation noise on the feature, volatility threshold, benchmark with the true regime variance; resolution and regime-volatility experiments (E6, E7); this history; P4 options and their experiment (E8) |
+| 2026-09-24 11:14 to 17:56 | a760679, 24ab12c, fea6422 | model v1 frozen (a configuration of P4, see below); its validation on 100 datasets (E9); `run-v1` and the paired summary in `planted_threshold_experiments.py`; the beamer decks `presentation_model_v1.tex` and `presentation_model_v1_short.tex`; Configuration v1 section in the model document |
+| 2026-09-25 11:58, 18:33 | 4d7a7c8, f687c5d | `pipeline_algorithm.tex`: the core algorithm block by block (pseudo-code and flowcharts), reviewed section by section; the plan for v2 below (still uncommitted) |
+| 2026-09-28 (uncommitted) | | the plan for v2 gains the exact leaf search (item 4); the report folder pruned: the experiments report no longer restates the training loop (one paragraph points to the two model documents), the change log of the model document points to this history, the LaTeX build files are removed from the folder; E10 (`run-v2`, 3150 fits): model v1 against the signal strength, the volatility and the half-life of x; the short deck gets a numbered outline and explicit units for every parameter |
 
 ## Pipeline versions (the tree and its training)
 
@@ -62,6 +64,34 @@ The current description of the training is `model_and_training_pipeline.tex`; ea
 | E7 | 2026-09-23 | M2', volatility 1% below d_σ and 0.5% above, d_σ ∈ {d, d + 1} | P3b, all options off (= P2) | λ ∈ {1, 10}; covariance window 180 or 20 days; edges 0.05 / 0.10; rates 2/5/10/21 | 2240 fits | `experiments_regime_volatility.tex` | with d_σ = d the drift threshold is found better (calm good regime) and every Sharpe nearly doubles; the volatility boundary at d + 1 is not learnt because the regret uses the same lagged covariance as the optimizer; a 20-day window tracks the regime but its noise costs more; next: a regime-aware variance estimate |
 | E8 | 2026-09-23 | M2, edges 0.05 / 0.10, rates 2/5/10/21 | P4 | smoothing κ = 0.5 and 0.25 (Laplace), κ = 1 (Gaussian); hurdle 2 s.e. below the root; each alone and on top of deciles + refinement | 2240 fits | `experiments_planted_threshold.tex`, Section 12 | κ = 0.25 cures the no-trade problem (spread 0.2, base turnover) and matches the base from weekly on, still −0.26 Sharpe at 2 days; the hurdle below the root removes the second-level leaves (25/10/5/5% → 5/0/0/0%) at no Sharpe cost from weekly on, −0.13 at 2 days; no option beats the base beyond noise |
 | E9 | 2026-09-24 | M2, edges 0.05 / 0.10, rates 2/5/10/21 | P4, configuration v1 | model v1 as a whole (depth ≤ 3, deciles by rank + refinement 1 s.e., 10% leaf fraction, hurdle 2 s.e. below the root) on 100 datasets, seeds 0–99 = the base of E2, so the comparison is paired | 800 fits (plus the 800 base fits of E2) | `experiments_planted_threshold.tex`, Section 13; `presentation_model_v1.tex` | v1 equals the base within noise from weekly on (paired Sharpe differences 0.00 ± 0.04, +0.01 ± 0.05, −0.01 ± 0.03 at edge 0.10; −0.03 ± 0.05, +0.03 ± 0.04, −0.03 ± 0.03 at edge 0.05) with the second-level leaves gone (18/14/9% → 0/2/0% at edge 0.10) and 1.9 leaves instead of 2.1; at every 2 days it costs 0.08 ± 0.07 at edge 0.10; the depth budget of 3 is never used in this one-threshold market |
+| E10 | 2026-09-28 | M2, weekly (the half-life sweep also every 2 days) | P4, configuration v1 | λ ∈ {1, 5}, fee 3 bp and 0; drift ±5 to ±38%/yr at 16% volatility; volatility 8–48%/yr at a drift of ±25%/yr; half-life of x 2–69 days | 3150 fits (plus 300 of E9) | `experiments_planted_threshold.tex`, Section 14; command `run-v2`; figures `model_v1_recovery_vs_sharpe`, `model_v1_second_splits`, `model_v1_halflife` | the precision of the threshold is set by the Sharpe ratio of the regime drift (std ≈ 0.3/Sharpe at λ = 1; within 0.25 of d: 24% at a Sharpe of 0.3, 90% at 2.4; fees change little); at λ = 5 the split sits 0.25–0.35 above d at every strength, because the ideal position is a ramp and the best single split cuts it in the middle; volatility of 32–48% lowers the recovery beyond its Sharpe through λσ²; v1 keeps almost no second-level split (0–8%); a fast feature needs a fast decision rate: at half-lives of 2–7 days weekly decisions earn 0.25–0.48 against an ideal rule of 0.36–0.60 and the tree switches less often than the ideal rule, every 2 days recovers the threshold in 80% of the datasets at 0.57–0.67 with 21–36 full moves a year (0.06–0.11%/yr of fees at 3 bp): the holding period, not the fee, is the limit |
+
+## Plan for v2 (decided on 25 September 2026, after the block-by-block review of the pipeline)
+
+The review is in `pipeline_algorithm.tex`. Three changes of the training were decided on 25 September and a fourth was added on
+28 September; none is implemented yet.
+
+1. **Fees in the regret.** In v1 the score search prices every date's trade against the holdings of the *current* tree's
+   path, frozen for the round (the "frozen holdings" approximation). Judged unconvincing: it is the cost of switching from
+   the old strategy to the candidate's decisions, date by date, not the fee bill of the candidate strategy. Decision:
+   remove the fees from the regret used by the score search and the regret gate, and keep them where a strategy is
+   really traded, the in-sample Sharpe gate (whole-tree replay) and the pruning replays on the checking rows. Alternative
+   to test against it: chain the holdings inside the score search (a sequential replay per evaluation, much slower).
+2. **Candidate thresholds.** v1 takes the deciles *by rank* among the admissible thresholds. Decision: take the quantiles
+   of the thresholds' probability distribution instead (the grid is then finer where thresholds are dense); the
+   refinement window follows.
+3. **Rescore to a fixed point.** v1 runs the score search again once after growth (kept if the Sharpe on the fitting rows
+   does not drop). Decision: option `rescore passes = k`, stop when no score moves; test whether it changes anything.
+4. **Exact leaf scores** (added 28 September). v1 fits a leaf score by a 3 × 7 coordinate grid search. Decision: option
+   `leaf_search = "exact"`, the exact minimizer of the piecewise-quadratic leaf regret, for 2 to 4 assets (not a gradient
+   descent: the regret is flat wherever no asset is free).
+
+Earlier candidates, still open: the growth Sharpe gate off or replaced by a path-replayed regret; a regime-aware variance
+for the optimizer and the regret; two features and decoys at market-sized edges; feature denoising; λ ≥ 5 with soft
+splits; real data; the neural benchmark of `motivations.md`.
+
+Protocol for every change: an option off by default, tested alone and combined on the 100 datasets of E9 (paired with
+v1), documented in the model document and the experiments report in the same step.
 
 ## Conventions kept throughout
 

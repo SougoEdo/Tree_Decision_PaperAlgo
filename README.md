@@ -10,7 +10,7 @@ code/                                the model and the experiments; run the comm
   planted_threshold_test.py          one planted-threshold dataset, fitted and printed in detail
   planted_threshold_experiments.py   the experiment sweeps and the figures:
                                      run | run-settings | run-enhancements | run-pruning |
-                                     run-resolution | run-regime | run-options | run-v1 | plot | time
+                                     run-resolution | run-regime | run-options | run-v1 | run-v2 | plot | time
   run_real_data.py                   template for real data (fill in load_data)
   tests/                             unit tests:  python -m unittest discover -s tests
 report/
@@ -34,6 +34,7 @@ cd code
 ../.venv/bin/python planted_threshold_test.py               # one dataset, printed in detail
 ../.venv/bin/python planted_threshold_experiments.py run    # the daily-data sweep (about 100 minutes)
 ../.venv/bin/python planted_threshold_experiments.py run-v1 # model v1 on 100 datasets (about 25 minutes)
+../.venv/bin/python planted_threshold_experiments.py run-v2 # model v1 against the signal strength, the volatility and the half-life (about 85 minutes)
 ../.venv/bin/python planted_threshold_experiments.py plot   # every figure and summary table, from the saved results
 cd ../report && latexmk -pdf model_and_training_pipeline.tex pipeline_algorithm.tex experiments_planted_threshold.tex experiments_regime_volatility.tex presentation_model_v1.tex presentation_model_v1_short.tex
 ```

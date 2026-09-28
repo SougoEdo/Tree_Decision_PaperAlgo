@@ -40,7 +40,7 @@
 \item Daily to weekly decisions are equivalent. Monthly decisions lose precision and profit, all the more when the feature is fast (half-life of a week): the regime then changes inside the holding period.
 \item A defect was found and fixed on the way: a tree that stayed in cash had an undefined Sharpe ratio, which made pruning reject every split whose alternative was cash (Section~\ref{sec:code}).
 \item \emph{Limit:} one clean feature. The earlier experiment (Section~\ref{sec:first}) showed decoys are ignored at a huge drift; whether they stay ignored at these drifts is the next test.
-\item \emph{Three more experiments} follow, one section each: risk aversion, fees and depth (Section~\ref{sec:settings}); quantile candidates, refinement and soft splits (Section~\ref{sec:enhancements}); a calibrated pruning hurdle (Section~\ref{sec:pruning}). Each opens with its own one-paragraph summary. Added later: the resolution of the threshold against noise (Section~\ref{sec:resolution}), sharper smoothing weights and the hurdle below the root (Section~\ref{sec:options2}), and the validation of model v1 on 100 datasets (Section~\ref{sec:v1}).
+\item \emph{Three more experiments} follow, one section each: risk aversion, fees and depth (Section~\ref{sec:settings}); quantile candidates, refinement and soft splits (Section~\ref{sec:enhancements}); a calibrated pruning hurdle (Section~\ref{sec:pruning}). Each opens with its own one-paragraph summary. Added later: the resolution of the threshold against noise (Section~\ref{sec:resolution}), sharper smoothing weights and the hurdle below the root (Section~\ref{sec:options2}), the validation of model v1 on 100 datasets (Section~\ref{sec:v1}), and model v1 swept against the strength of the signal, the volatility and the half-life of the feature (Section~\ref{sec:v1sweeps}).
 \end{itemize}}
 
 \section{The model under test}\label{sec:model}
@@ -57,12 +57,7 @@ where $\hat c$ is a vector of scores (one per asset) supplied by the predictor a
 \end{equation}
 the utility lost by deciding on $\hat c$ instead of on the returns that happened (the SPO loss of Elmachtoub \& Grigas with costs and risk inside). The predictor is trained on this regret, not on a forecast error.
 
-\textbf{SPO tree.} The predictor is a decision tree on $x$ of depth at most 2, each leaf holding one score vector $\hat c_\ell=(\hat c_\ell,0)$ (cash has score 0). It is fitted as in SPOT (Elmachtoub, Liang \& McNellis), with two additions of this implementation.
-\begin{itemize}\setlength{\itemsep}{1pt}
-\item \emph{Growth}, on the first 75\% of the training decisions. At each round and for every leaf, every threshold on $x$ is screened, the three best are refitted (leaf scores by a bounded coordinate search on the empirical regret, $|\hat c_\ell|\le10\%$, at least 20 decisions per leaf), and the split with the largest total regret reduction is accepted if the replayed training Sharpe ratio rises. The holdings $u_t$ in \eqref{eq:regret} are those of the tree's own replayed path: fees depend on what was held before.
-\item \emph{Pruning}, on the last 25\% (the ``checking'' decisions, unseen during growth): a split stays only if, there, it lowers the mean regret and raises the Sharpe ratio. Leaf scores are then refitted on all training decisions.
-\end{itemize}
-The optimizer, the tree and its settings are those of \code{run_real_data.py} (the real-data pipeline).
+\textbf{SPO tree.} The predictor is a decision tree on $x$ of depth at most 2, each leaf holding one score vector $\hat c_\ell=(\hat c_\ell,0)$ (cash has score 0), fitted as in SPOT (Elmachtoub, Liang \& McNellis) on its own replayed path: the holdings $u_t$ in \eqref{eq:regret} are those of the tree's own trades, growth uses the first 75\% of the training decisions (a split must cut the regret and raise the replayed Sharpe ratio), the last 25\% prune, and the leaf scores are then refitted on all training decisions. The training is described once, in \code{model_and_training_pipeline.tex} (the equations) and \code{pipeline_algorithm.tex} (the pseudo-code); the settings of each experiment are given with its protocol (Table~\ref{tab:params} and the ``Pipeline used'' line of each section).
 
 \textbf{Two clocks.} Data are daily; decisions are taken every $h$ days and held in between. A training row is one decision: $x_t$ on the decision day, the label $r_t=S_{t+h}/S_t-1$ for the asset (0 for cash) and $\Sigma_t=\mathrm{diag}(h\,\hat\sigma_t^2,\,10^{-6})$ with $\hat\sigma_t^2$ the variance of the last 180 daily returns. $h$ is the trading rate.
 
@@ -750,6 +745,38 @@ model v1 & 2 & 1.72 & 67 & $+0.05\ [-0.14,+0.24]$ & 57\% & 4 & 0.18 & 0.46 & 39\
 
 \textbf{What this says.} The 100-dataset paired test confirms what the 40-dataset experiments suggested: v1 is not a higher Sharpe ratio, it is the same Sharpe ratio with smaller trees, thresholds as well centred, ten times fewer candidates screened, and no spurious leaf, from weekly decisions on. Its known cost is at every 2 days. The parts of v1 that this market cannot test are the depth budget and the behaviour with several features; the part it does not question is the growth gate on the replayed Sharpe ratio, kept as designed.
 
+\section{Model v1 against the strength of the signal, the volatility and the half-life of the feature}\label{sec:v1sweeps}
+\textbf{Pipeline used.} P4 in configuration v1 (Section~\ref{sec:v1}) at $\lambda=1$ and $\lambda=5$, with the 3~bp fee and without fees; weekly decisions, and every 2 days as well in the half-life sweep; market M2. 50 datasets per cell (seeds 0--49); the three cells E9 had already run ($\lambda=1$, 3~bp, edges 0.05 and 0.10) are reused with their 100 datasets. 3{,}150 new fits (E10, 28 September).
+
+\keybox{\textbf{In short.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item \textbf{The Sharpe ratio of the regime drift sets the precision of the threshold.} At $\lambda=1$ the standard deviation of the first threshold is about $0.3/\text{Sharpe}$, in standard deviations of $x$: 0.64 at a Sharpe of 0.3 ($\pm5\%$ a year at 16\% volatility), 0.19 at 1.6 ($\pm25\%$), 0.13 at 2.4. The share of datasets within 0.25 of $d$ goes from 24 to 90\%, the share that keeps no split from 58 to 0\%. Fees change little.
+\item \textbf{Volatility matters only through that Sharpe ratio, until the risk term bites.} Raising the volatility at a fixed drift moves the points along the same curve as lowering the drift, except at 32--48\% a year, where $\lambda\sigma^2$ makes the ideal position gradual and the recovery falls below the curve.
+\item \textbf{At $\lambda=5$ the split sits 0.25--0.35 above $d$ at every strength.} The ideal position is then a ramp in $x$, and the best single split cuts the ramp in its middle, not at $d$: ``within 0.25 of $d$'' is the wrong yardstick at $\lambda=5$.
+\item \textbf{v1 keeps almost no second-level split} (0--8\% of the datasets at edge 0.10); the few it keeps sit next to the first threshold or in the tails of $x$.
+\item \textbf{A fast feature needs a fast decision rate, and fees are not what limits it.} With half-lives of 2--7 days, weekly decisions earn 0.25--0.48 against an ideal rule of 0.36--0.60, and the tree switches \emph{less} often than the ideal rule (13--15 against 19--22 full moves a year). Every 2 days the threshold is found in 80\% of the datasets and the tree earns 0.57--0.67 against 0.66--0.84, at 21--36 moves a year, which cost 0.06--0.11\% a year at 3~bp. A slow feature (69 days) is best traded weekly.
+\end{itemize}}
+
+\textbf{Protocol.} Command \code{run-v2} of \code{planted_threshold_experiments.py}; results in \code{results_model_v1_sweeps.json}, merged with the E9 records. \emph{Signal}: edge $e\in\{0.02,0.035,0.05,0.07,0.10,0.15\}$ at $\sigma=1\%$ a day, a drift of $\pm5$ to $\pm38\%$ a year and a Sharpe ratio of the regime drift $e\sqrt{252}$ of 0.32 to 2.38. \emph{Volatility}: $\sigma$ from 0.5 to 3\% a day (8 to 48\% a year) at a drift of $\pm25\%$ a year, fee 3~bp. \emph{Half-life}: $k\in\{0.35,0.2,0.1,0.05,0.02,0.01\}$ a day, half-lives $\ln2/k$ of 2 to 69 days, at edge 0.10. Measured per cell: mean and standard deviation of the first threshold over the datasets that split; shares of datasets within 0.25 of $d$, without a split, with a second-level split; annualized test Sharpe ratios of the tree and of the ideal rule; full moves between the asset and cash per year (half the turnover, annualized). \code{plot} prints the whole table.
+
+\begin{figure}[H]
+\centering\includegraphics[width=\linewidth]{model_v1_recovery_vs_sharpe}
+\caption{Recovery of the threshold against the Sharpe ratio of the regime drift (weekly decisions). Lines: the drift swept at 16\% volatility; hollow squares: the volatility swept at a drift of $\pm25\%$ a year, labelled with the annual volatility. Orange $\lambda=1$, blue $\lambda=5$; dashed: no fee.}
+\label{fig:v1sweeps-signal}
+\end{figure}
+
+\begin{figure}[H]
+\centering\includegraphics[width=0.8\linewidth]{model_v1_second_splits}
+\caption{Where the thresholds land at edge 0.10, weekly: the first thresholds (orange) and the second-level thresholds v1 keeps (light).}
+\label{fig:v1sweeps-second}
+\end{figure}
+
+\begin{figure}[H]
+\centering\includegraphics[width=\linewidth]{model_v1_halflife}
+\caption{The tree against the half-life of $x$ at edge 0.10: threshold, recovery, annualized test Sharpe ratio and full moves between the asset and cash per year; the ideal rule in grey.}
+\label{fig:v1sweeps-halflife}
+\end{figure}
+
 \section{How to reproduce}
 The code is in \code{code/} (run the commands below from that folder, with the project's Python, \code{../.venv/bin/python}); results and figures are in \code{report/figures/}. The results were produced with \code{synthetic_market.py} as committed in \code{eae145c} (one volatility for both regimes).
 \begin{itemize}\raggedright\setlength{\itemsep}{1pt}
@@ -763,6 +790,7 @@ The code is in \code{code/} (run the commands below from that folder, with the p
 \item \code{python planted_threshold_experiments.py} \code{run-resolution}: the resolution sweeps of Section~\ref{sec:resolution}, 1{,}920 fits; writes \code{results_resolution.json}, drawn by \code{plot} as Figure~\ref{fig:resolution}.
 \item \code{python planted_threshold_experiments.py} \code{run-options}: the sharper smoothing weights and the hurdle below the root of Section~\ref{sec:options2}, 2{,}240 fits; writes \code{results_split_options_2.json}, drawn by \code{plot} as Figures~\ref{fig:options2-scores}--\ref{fig:options2-thresholds}.
 \item \code{python planted_threshold_experiments.py} \code{run-v1}: model v1 on 100 datasets (Section~\ref{sec:v1}), 800 fits; writes \code{results_model_v1.json}, which \code{plot} compares with the base records of \code{results_daily_threshold.json} (Figures~\ref{fig:v1-thresholds}--\ref{fig:v1-maps} and Table~\ref{tab:v1}).
+\item \code{python planted_threshold_experiments.py} \code{run-v2}: the sweeps of Section~\ref{sec:v1sweeps}, 3{,}150 fits, 83 minutes on 10 cores; writes \code{results_model_v1_sweeps.json}, drawn by \code{plot} as Figures~\ref{fig:v1sweeps-signal}--\ref{fig:v1sweeps-halflife}.
 \item \code{report/model_and_training_pipeline.tex}: the model and its training, step by step, with the equations of every option.
 \end{itemize}
 \end{document}
