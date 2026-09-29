@@ -2074,7 +2074,7 @@ def draw_mean(axis, xs, summaries, color, label):
         xs, [s["mean"] for s in summaries], yerr=[s["std"] for s in summaries], color=color, capsize=3, label=label, **LINE
     )
     axis.axhline(BASE.d, color="black", ls=":", lw=1)
-    axis.set_ylabel("first threshold on x (std of x = 1)")
+    axis.set_ylabel("first threshold on x")
     axis.set_ylim(-0.8, 1.0)
 
 
@@ -2160,7 +2160,7 @@ def figure_deck_volatility(results, plt, lam=1.0):
         draw_value(axes[1], xs, summaries, "within", color, label)
         draw_value(axes[2], xs, summaries, "sharpe", color, label, "tree")
     axes[0].set_title("first threshold\nmean ± std")
-    axes[0].set_ylabel("threshold on x (std of x = 1)")
+    axes[0].set_ylabel("threshold on x")
     axes[1].set_title("first threshold\nwithin 0.25 of d")
     axes[1].set_ylabel("datasets (%)")
     axes[1].set_ylim(0, 100)
@@ -2189,7 +2189,7 @@ def figure_deck_second_splits(results, plt):
         axis.axvline(BASE.d, color="black", ls=":", lw=1.2, label="planted d = 0")
         share = 100 * np.mean([any(d >= 1 for d, _, _ in r["kept"]) for r in cell])
         axis.set_title(f"λ = {lam:g}: {share:.0f}% keep a second-level split\n({len(cell)} datasets)")
-        axis.set_xlabel("threshold on x (std of x = 1)")
+        axis.set_xlabel("threshold on x")
         axis.set_ylabel("number of splits")
     return deck_end(fig, plt, axes[0])
 
@@ -2352,7 +2352,7 @@ def threshold_axis(axis, positions, labels, xlabel):
     axis.axhline(BASE.d, color="black", ls=":", lw=1.2)
     axis.set_xticks(positions, labels)
     axis.set_xlabel(xlabel)
-    axis.set_ylabel("first threshold on x (std of x = 1)")
+    axis.set_ylabel("first threshold on x")
     axis.set_ylim(-1.5, 1.5)
 
 
@@ -2418,9 +2418,59 @@ def figure_deck_threshold_hist(v1, base, plt, step=5):
             draw_hist(axis, first, bins, color, label)
         axis.axvline(BASE.d, color="black", ls=":", lw=1.2)
         axis.set_title(f"drift ±{edge * 252:.0f}% a year, {RATE_NAMES[step]} decisions")
-        axis.set_xlabel("first threshold on x (std of x = 1)")
+        axis.set_xlabel("first threshold on x")
         axis.set_ylabel("number of trees")
     return deck_end(fig, plt, axes[0], ncol=2, bottom=0.16)
+
+
+def deck_grid(plt, rows, cols, width=10.5, height=5.0):
+    """A grid of small panels for the deck, with slightly smaller type than deck_start."""
+    plt.rc("font", size=DECK_FONT - 1)
+    fig, axes = plt.subplots(rows, cols, figsize=(width, height), sharex=True)
+    return fig, axes
+
+
+def figure_deck_threshold_rate_hist(v1, base, plt, steps=(2, 10, 21)):
+    """E9: the distribution of the first threshold at the decision rates other than weekly (which has its own
+    frame), v1 against the base, at the two drifts."""
+    fig, axes = deck_grid(plt, 2, len(steps))
+    bins = np.linspace(-1.5, 1.5, 31)
+    for row, edge in zip(axes, (0.10, 0.05)):
+        for axis, step in zip(row, steps):
+            counts = []
+            for records_, color, label in ((base, GREY, "base"), (v1, ORANGE, "model v1")):
+                cell = [r for r in records_ if r["step"] == step and r["edge"] == edge]
+                first = first_thresholds(cell)
+                draw_hist(axis, first, bins, color, label)
+                counts.append(f"{len(first)}/{len(cell)}")
+            axis.axvline(BASE.d, color="black", ls=":", lw=1.2)
+            axis.set_title(f"drift ±{edge * 252:.0f}% a year, {RATE_NAMES[step]}", fontsize=DECK_FONT - 2)
+    for axis in axes[-1]:
+        axis.set_xlabel("first threshold on x")
+    for row in axes:
+        row[0].set_ylabel("number of trees")
+    return deck_end(fig, plt, axes[0][0], ncol=2, bottom=0.11)
+
+
+def figure_deck_halflife_hist(results, plt, lam=1.0):
+    """E10: the distribution of the first threshold by half-life of x, weekly against twice a week
+    (λ = 1, fee 3 bp)."""
+    fig, axes = deck_grid(plt, 2, 3)
+    bins = np.linspace(-1.5, 1.5, 31)
+    for axis, k in zip(axes.flat, V2_K):
+        counts = []
+        for step in (5, 2):
+            cell = v2_cell(results, step, BASE.edge, k, BASE.volatility, lam, BASE.fee)
+            first = first_thresholds(cell)
+            draw_hist(axis, first, bins, RATE_COLORS[step], f"decisions {RATE_NAMES[step]}")
+            counts.append(f"{len(first)}/{len(cell)}")
+        axis.axvline(BASE.d, color="black", ls=":", lw=1.2)
+        axis.set_title(f"half-life {half_life(k):.2g} days", fontsize=DECK_FONT - 2)
+    for axis in axes[-1]:
+        axis.set_xlabel("first threshold on x")
+    for row in axes:
+        row[0].set_ylabel("number of trees")
+    return deck_end(fig, plt, axes[0][0], ncol=2, bottom=0.11)
 
 
 def figure_deck_regime_positions(results, plt, step=5, edge=0.10):
@@ -2442,7 +2492,7 @@ def figure_deck_regime_positions(results, plt, step=5, edge=0.10):
         axis.axvline(BASE.d, color="black", ls=":", lw=1.2, label="drift threshold d = 0")
         axis.axvline(cell[0]["volatility_threshold"], color=RED, ls=":", lw=1.6, label="volatility threshold d + 1")
         axis.set_title(f"λ = {lam:g} ({len(cell)} datasets, median position)")
-        axis.set_xlabel("x on the decision day (std of x = 1)")
+        axis.set_xlabel("x on the decision day")
         axis.set_ylabel("mean weight of the asset")
         axis.set_ylim(-0.05, 1.05)
     return deck_end(fig, plt, axes[0], ncol=3, bottom=0.24)
@@ -2471,9 +2521,84 @@ def figure_deck_regime_splits(results, plt, step=5, edge=0.10):
             [any(abs(th - d_sigma) <= 0.25 for d, f, th in r["kept"] if d >= 1) for r in cell]
         )
         axis.set_title(f"{title} ({len(cell)} datasets)\n{near:.0f}% split near the volatility threshold")
-        axis.set_xlabel("threshold on x (std of x = 1)")
+        axis.set_xlabel("threshold on x")
         axis.set_ylabel("number of splits")
     return deck_end(fig, plt, axes[0], ncol=2, bottom=0.27)
+
+
+# The short deck, section "How the tree learns, in plain words": one dataset fitted with model v1.
+BIGPICTURE_COLORS = {"navy": "#1F4E9C", "brick": "#C0392B", "leaf": "#2E8B57", "orange": "#E67E22"}
+
+
+def fitting_weeks(result):
+    """x and the return (in %) of the fitting weeks: the first 75% of the training decisions (run_case prunes on the last 25%)."""
+    case, rows = result["case"], result["rows"]
+    n_fit = case.n_train - int(round(0.25 * case.n_train))
+    return rows.X[:n_fit, 0], rows.R[:n_fit, 0] * 100
+
+
+def wrong_weeks_cost(returns):
+    """Money lost on the wrong weeks by the better of the two answers: the losses taken in the asset if the
+    weeks gain in total, the gains missed in cash otherwise. It is the decision regret without fees or risk term."""
+    if len(returns) == 0:
+        return 0.0
+    return min(-returns[returns < 0].sum(), returns[returns > 0].sum())
+
+
+def figure_deck_bigpicture_split(result, plt):
+    """The fitting weeks sorted by x, their returns, the root cut and the answer of each leaf."""
+    x, r = fitting_weeks(result)
+    roots = [th for depth, feature, th in result["kept"] if depth == 0 and feature == "x"]
+    c = BIGPICTURE_COLORS
+    fig, ax = plt.subplots(figsize=(3.6, 3.0))
+    ax.scatter(x, r, s=4, color="0.72", label="one training week")
+    bins = np.linspace(-2.75, 2.75, 23)
+    idx = np.digitize(x, bins)
+    full = [b for b in range(1, len(bins)) if (idx == b).sum() >= 6]
+    ax.plot([0.5 * (bins[b - 1] + bins[b]) for b in full], [r[idx == b].mean() for b in full],
+            "o-", color=c["navy"], ms=4, lw=1.4, label="average return per interval of $x$")
+    if roots:
+        theta = roots[0]
+        left, right = x < theta, x >= theta
+        ax.hlines(r[left].mean(), x.min(), theta, color=c["orange"], lw=3.5)
+        ax.hlines(r[right].mean(), theta, x.max(), color=c["orange"], lw=3.5, label="leaf average")
+        ax.axvline(theta, color=c["brick"], lw=1.6, ls="--", label=f"the cut: $x = {theta:.2f}$")
+        ax.text(theta - 0.12, 7.6, f"leaf 1: {r[left].mean():+.2f}%\ncash", ha="right", va="top", color=c["brick"], fontsize=7.5)
+        ax.text(theta + 0.12, 7.6, f"leaf 2: {r[right].mean():+.2f}%\nasset", ha="left", va="top", color=c["leaf"], fontsize=7.5)
+    ax.axhline(0, color="k", lw=0.6)
+    ax.set_xlim(-3, 3)
+    ax.set_ylim(-8, 8)
+    ax.set_xlabel("$x$ on the decision day", fontsize=8)
+    ax.set_ylabel("return of the next 5 days (%)", fontsize=8)
+    ax.tick_params(labelsize=7.5)
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=2, fontsize=7, frameon=False, columnspacing=1.0, handlelength=1.6)
+    fig.tight_layout(rect=(0, 0.12, 1, 1))
+    return fig
+
+
+def figure_deck_bigpicture_cost(result, plt):
+    """The cost of every admissible cut position under the simplified rule, against the cost without a cut."""
+    case = result["case"]
+    x, r = fitting_weeks(result)
+    n_fit = len(x)
+    m_star = max(case.min_samples_leaf, int(np.ceil(case.min_leaf_fraction * n_fit)))
+    candidates = np.sort(x)[m_star:-m_star]
+    costs = np.array([(wrong_weeks_cost(r[x < th]) + wrong_weeks_cost(r[x >= th])) / n_fit for th in candidates])
+    without = wrong_weeks_cost(r) / n_fit
+    best = candidates[np.argmin(costs)]
+    c = BIGPICTURE_COLORS
+    fig, ax = plt.subplots(figsize=(3.6, 3.0))
+    ax.plot(candidates, costs, color=c["navy"], lw=1.5, label="cost with one cut at $\\theta$")
+    ax.axhline(without, color="0.35", ls=":", lw=1.4, label=f"cost without a cut: {without:.2f}%")
+    ax.plot([best], [costs.min()], "o", color=c["brick"], ms=7, label=f"cheapest cut: $\\theta = {best:.2f}$, {costs.min():.2f}%")
+    ax.set_xlabel("position of the cut $\\theta$", fontsize=8)
+    ax.set_ylabel("cost (% lost a week)", fontsize=8)
+    ax.tick_params(labelsize=7.5)
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=1, fontsize=7, frameon=False)
+    fig.tight_layout(rect=(0, 0.17, 1, 1))
+    return fig
 
 
 def plot():
@@ -2613,6 +2738,7 @@ def plot():
                 "deck_e9_paired": figure_deck_e9(v1, base, plt),
                 "deck_threshold_rate": figure_deck_threshold_rate(v1, base, plt),
                 "deck_threshold_hist": figure_deck_threshold_hist(v1, base, plt),
+                "deck_threshold_rate_hist": figure_deck_threshold_rate_hist(v1, base, plt),
             }
         )
     if os.path.exists(OPTIONS2_RESULTS):
@@ -2705,8 +2831,17 @@ def plot():
                 "deck_halflife_band": figure_deck_halflife_band(v2, plt),
                 "deck_threshold_signal": figure_deck_threshold_signal(v2, plt),
                 "deck_threshold_halflife": figure_deck_threshold_halflife(v2, plt),
+                "deck_halflife_hist": figure_deck_halflife_hist(v2, plt),
             }
         )
+    # the short deck, "How the tree learns, in plain words": model v1 on one dataset
+    single_v1 = run_case(replace(BASE, **V1_SETTING), seed=42)
+    figures.update(
+        {
+            "deck_bigpicture_split": figure_deck_bigpicture_split(single_v1, plt),
+            "deck_bigpicture_cost": figure_deck_bigpicture_cost(single_v1, plt),
+        }
+    )
     for name, fig in figures.items():
         fig.savefig(os.path.join(OUT, name + ".pdf"))
         fig.savefig(os.path.join(OUT, name + ".png"), dpi=130)

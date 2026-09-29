@@ -20,7 +20,8 @@ report/
   experiments_planted_threshold.tex  the experiments on the first market (constant volatility), one section per sweep
   experiments_regime_volatility.tex  the experiments on the second market (volatility follows a threshold too)
   presentation_model_v1.tex          beamer deck: model v1 (24 September 2026), its training and the evidence behind it
-  presentation_model_v1_short.tex    the 15-minute version of the deck: model with equations, then the results
+  presentation_model_v1_short.tex    the deck for a non-specialist audience: how the tree learns in plain words, then the results;
+                                     the equations, the options and the v1 table in an appendix
   model_history.md                   dated history of the pipeline versions, the markets and the experiments
   motivations.md                     the motivations of the project
   figures/                           figures and results files (results_*.json) written by the experiments
