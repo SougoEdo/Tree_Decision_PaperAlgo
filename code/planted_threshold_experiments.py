@@ -2042,7 +2042,7 @@ def signal_axis(axis):
     axis.set_xscale("log")
     axis.set_xticks(ticks, [f"{t:.1f}" for t in ticks])
     axis.minorticks_off()
-    axis.set_xlabel("Sharpe ratio of the regime drift (annualized)")
+    axis.set_xlabel("Sharpe ratio of the regime drift")
 
 
 def halflife_axis(axis):
@@ -2050,7 +2050,7 @@ def halflife_axis(axis):
     axis.set_xscale("log")
     axis.set_xticks(lives, [f"{h:.2g}" for h in lives])
     axis.minorticks_off()
-    axis.set_xlabel("half-life of the feature x (days)")
+    axis.set_xlabel("half-life of x (days)")
 
 
 def signal_series(results, lam, fee):
@@ -2096,8 +2096,8 @@ def figure_deck_signal_threshold(results, plt):
         if len(xs):
             draw_mean(left, xs, summaries, LAMBDA_COLORS[lam], f"λ = {lam:g}")
             draw_value(right, xs, summaries, "within", LAMBDA_COLORS[lam], f"λ = {lam:g}")
-    left.set_title("first threshold: mean ± std")
-    right.set_title("first threshold within 0.25 of d (%)")
+    left.set_title("first threshold, mean ± std")
+    right.set_title("within 0.25 of d (%)")
     right.set_ylabel("datasets (%)")
     right.set_ylim(0, 100)
     for axis in (left, right):
@@ -2116,7 +2116,7 @@ def figure_deck_signal_sharpe(results, plt):
         if len(xs):
             draw_value(axis, xs, summaries, "sharpe", GREEN, "tree, no fee", "tree")
         axis.set_title(f"λ = {lam:g}")
-        axis.set_ylabel("annualized test Sharpe ratio")
+        axis.set_ylabel("test Sharpe")
         signal_axis(axis)
     return deck_end(fig, plt, axes[0])
 
@@ -2128,8 +2128,8 @@ def figure_deck_signal_splits(results, plt):
         if len(xs):
             draw_value(left, xs, summaries, "none", LAMBDA_COLORS[lam], f"λ = {lam:g}")
             draw_value(right, xs, summaries, "second", LAMBDA_COLORS[lam], f"λ = {lam:g}")
-    left.set_title("trees that keep no split at all")
-    right.set_title("trees that keep a second-level split")
+    left.set_title("no split kept")
+    right.set_title("second-level split kept")
     left.set_ylim(0, 100)
     right.set_ylim(0, 30)
     for axis in (left, right):
@@ -2151,8 +2151,8 @@ def figure_deck_volatility(results, plt, lam=1.0):
         cells.append((price_sharpe(edge), 5, edge, BASE.k, daily))
     vol = v2_lines(results, lam, BASE.fee, cells)
     for (xs, summaries, kept), color, label in (
-        (drift, ORANGE, "drift swept, volatility 16% a year"),
-        (vol, BLUE, "volatility swept from 8 to 48% a year, drift ±25% a year"),
+        (drift, ORANGE, "drift swept, volatility 16%"),
+        (vol, BLUE, "volatility swept 8 to 48%, drift ±25%"),
     ):
         if not len(xs):
             continue
@@ -2164,7 +2164,7 @@ def figure_deck_volatility(results, plt, lam=1.0):
     axes[1].set_title("first threshold\nwithin 0.25 of d")
     axes[1].set_ylabel("datasets (%)")
     axes[1].set_ylim(0, 100)
-    axes[2].set_title("test Sharpe of the tree\n(annualized)")
+    axes[2].set_title("tree, test Sharpe")
     axes[2].set_ylabel("Sharpe ratio")
     ticks = [0.3, 0.5, 1, 2, 3]
     for axis in axes:
@@ -2188,9 +2188,9 @@ def figure_deck_second_splits(results, plt):
         draw_hist(axis, second, bins, BLUE, "second-level threshold")
         axis.axvline(BASE.d, color="black", ls=":", lw=1.2, label="planted d = 0")
         share = 100 * np.mean([any(d >= 1 for d, _, _ in r["kept"]) for r in cell])
-        axis.set_title(f"λ = {lam:g}: {share:.0f}% keep a second-level split\n({len(cell)} datasets)")
+        axis.set_title(f"λ = {lam:g}: {share:.0f}% keep a second split, {len(cell)} datasets")
         axis.set_xlabel("threshold on x")
-        axis.set_ylabel("number of splits")
+        axis.set_ylabel("splits")
     return deck_end(fig, plt, axes[0])
 
 
@@ -2201,8 +2201,8 @@ def figure_deck_halflife_threshold(results, plt, lam=1.0):
         if len(xs):
             draw_mean(left, xs, summaries, RATE_COLORS[step], f"decisions {RATE_NAMES[step]}")
             draw_value(right, xs, summaries, "within", RATE_COLORS[step], f"decisions {RATE_NAMES[step]}")
-    left.set_title("first threshold: mean ± std")
-    right.set_title("first threshold within 0.25 of d (%)")
+    left.set_title("first threshold, mean ± std")
+    right.set_title("within 0.25 of d (%)")
     right.set_ylabel("datasets (%)")
     right.set_ylim(0, 100)
     for axis in (left, right):
@@ -2222,7 +2222,7 @@ def figure_deck_halflife_sharpe(results, plt, lam=1.0, key="sharpe"):
             draw_value(axis, xs, summaries, key, GREEN, "tree, no fee", "tree")
         axis.set_title(f"decisions {RATE_NAMES[step]}")
         axis.set_ylabel(
-            "annualized test Sharpe ratio" if key == "sharpe" else "asset / cash switches per year"
+            "test Sharpe" if key == "sharpe" else "switches per year"
         )
         halflife_axis(axis)
     if key == "sharpe":
@@ -2248,10 +2248,10 @@ def figure_deck_e9(v1, base, plt):
             means.append(diff.mean())
             errors.append(2 * diff.std(ddof=1) / np.sqrt(len(seeds)))
         left.errorbar(
-            positions, means, yerr=errors, color=color, capsize=4, label=f"drift ±{edge * 252:.0f}% a year", **LINE
+            positions, means, yerr=errors, color=color, capsize=4, label=f"drift ±{edge * 252:.0f}%", **LINE
         )
     left.axhline(0, color="black", ls=":", lw=1)
-    left.set_title("v1 minus base: annualized Sharpe\n(paired, ± 2 s.e.)")
+    left.set_title("v1 minus base, test Sharpe")
     left.set_ylabel("Sharpe difference")
     width = 0.38
     for k, (name, records_, color) in enumerate((("base", base, GREY), ("model v1", v1, ORANGE))):
@@ -2260,7 +2260,7 @@ def figure_deck_e9(v1, base, plt):
             for step in SETTING_STEPS
         ]
         right.bar(positions + (k - 0.5) * width, shares, width, color=color, label=name)
-    right.set_title("trees with a second-level split\n(drift ±25% a year)")
+    right.set_title("second-level split kept, drift ±25%")
     right.set_ylabel("datasets (%)")
     for axis in (left, right):
         axis.set_xticks(
@@ -2310,11 +2310,11 @@ def figure_deck_halflife_band(results, plt, lam=1.0):
             )
         left.plot(lives, shares, color=color, label=label, **LINE)
         right.plot(lives, losses, color=color, label=label, **LINE)
-    left.set_title("trees with a leaf score inside the band")
+    left.set_title("frozen trees")
     left.set_ylabel("datasets (%)")
     left.set_ylim(0, 50)
-    right.set_title("Sharpe ratio lost by those trees")
-    right.set_ylabel("Sharpe of the others minus theirs")
+    right.set_title("test Sharpe: others minus frozen")
+    right.set_ylabel("Sharpe difference")
     right.axhline(0, color="black", ls=":", lw=1)
     for axis in (left, right):
         halflife_axis(axis)
@@ -2404,7 +2404,7 @@ def figure_deck_threshold_rate(v1, base, plt):
             draw_boxes(axis, groups, positions + shift, color, width=0.34, counts=False)
             axis.plot([], [], color=color, lw=2.4, label=label)
         threshold_axis(axis, positions, labels, "decision rate")
-        axis.set_title(f"drift ±{edge * 252:.0f}% a year")
+        axis.set_title(f"drift ±{edge * 252:.0f}%")
     return deck_end(fig, plt, axes[0], ncol=2, bottom=0.16)
 
 
@@ -2417,9 +2417,9 @@ def figure_deck_threshold_hist(v1, base, plt, step=5):
             first = first_thresholds([r for r in records_ if r["step"] == step and r["edge"] == edge])
             draw_hist(axis, first, bins, color, label)
         axis.axvline(BASE.d, color="black", ls=":", lw=1.2)
-        axis.set_title(f"drift ±{edge * 252:.0f}% a year, {RATE_NAMES[step]} decisions")
+        axis.set_title(f"drift ±{edge * 252:.0f}%, {RATE_NAMES[step]}")
         axis.set_xlabel("first threshold on x")
-        axis.set_ylabel("number of trees")
+        axis.set_ylabel("trees")
     return deck_end(fig, plt, axes[0], ncol=2, bottom=0.16)
 
 
@@ -2444,11 +2444,11 @@ def figure_deck_threshold_rate_hist(v1, base, plt, steps=(2, 10, 21)):
                 draw_hist(axis, first, bins, color, label)
                 counts.append(f"{len(first)}/{len(cell)}")
             axis.axvline(BASE.d, color="black", ls=":", lw=1.2)
-            axis.set_title(f"drift ±{edge * 252:.0f}% a year, {RATE_NAMES[step]}", fontsize=DECK_FONT - 2)
+            axis.set_title(f"drift ±{edge * 252:.0f}%, {RATE_NAMES[step]}", fontsize=DECK_FONT - 2)
     for axis in axes[-1]:
         axis.set_xlabel("first threshold on x")
     for row in axes:
-        row[0].set_ylabel("number of trees")
+        row[0].set_ylabel("trees")
     return deck_end(fig, plt, axes[0][0], ncol=2, bottom=0.11)
 
 
@@ -2469,7 +2469,7 @@ def figure_deck_halflife_hist(results, plt, lam=1.0):
     for axis in axes[-1]:
         axis.set_xlabel("first threshold on x")
     for row in axes:
-        row[0].set_ylabel("number of trees")
+        row[0].set_ylabel("trees")
     return deck_end(fig, plt, axes[0][0], ncol=2, bottom=0.11)
 
 
@@ -2484,16 +2484,16 @@ def figure_deck_regime_positions(results, plt, step=5, edge=0.10):
             continue
         for key, color, label in (
             ("tree", ORANGE, "tree"),
-            ("ideal rule", GREY, "ideal rule, same lagged covariance"),
+            ("ideal rule", GREY, "ideal rule, lagged covariance"),
             ("ideal rule, true variance", GREEN, "ideal rule, true variance"),
         ):
             values = np.array([[np.nan if v is None else v for v in r["profile"][key]] for r in cell])
             axis.plot(centers, np.nanmedian(values, axis=0), color=color, label=label, lw=2.2)
         axis.axvline(BASE.d, color="black", ls=":", lw=1.2, label="drift threshold d = 0")
         axis.axvline(cell[0]["volatility_threshold"], color=RED, ls=":", lw=1.6, label="volatility threshold d + 1")
-        axis.set_title(f"λ = {lam:g} ({len(cell)} datasets, median position)")
+        axis.set_title(f"λ = {lam:g}, median of {len(cell)} datasets")
         axis.set_xlabel("x on the decision day")
-        axis.set_ylabel("mean weight of the asset")
+        axis.set_ylabel("weight of the asset")
         axis.set_ylim(-0.05, 1.05)
     return deck_end(fig, plt, axes[0], ncol=3, bottom=0.24)
 
@@ -2520,9 +2520,9 @@ def figure_deck_regime_splits(results, plt, step=5, edge=0.10):
         near = 100 * np.mean(
             [any(abs(th - d_sigma) <= 0.25 for d, f, th in r["kept"] if d >= 1) for r in cell]
         )
-        axis.set_title(f"{title} ({len(cell)} datasets)\n{near:.0f}% split near the volatility threshold")
+        axis.set_title(f"{title}, {len(cell)} datasets\n{near:.0f}% split near d + 1")
         axis.set_xlabel("threshold on x")
-        axis.set_ylabel("number of splits")
+        axis.set_ylabel("splits")
     return deck_end(fig, plt, axes[0], ncol=2, bottom=0.27)
 
 
